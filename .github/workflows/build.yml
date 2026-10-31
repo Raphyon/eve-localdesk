@@ -62,12 +62,17 @@ jobs:
         shell: pwsh
         env:
           LOCALDESK_HOME: ${{ runner.temp }}\selftest
-          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+          # CI runners have no GPU and run as a service account where Chromium's sandbox can't start
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu --no-sandbox
         run: |
           $p = Start-Process -FilePath "dist\EVE LocalDesk\EVE LocalDesk.exe" -ArgumentList "--selftest" -Wait -PassThru
           $log = Join-Path $env:LOCALDESK_HOME "selftest.log"
-          if (Test-Path $log) { Get-Content $log } else { Write-Host "no selftest.log written" }
-          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+          $result = if (Test-Path $log) { (Get-Content $log -Raw).Trim() } else { "no selftest.log written" }
+          # as an annotation, so the result is visible on the run page and through the API
+          $escaped = $result -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+          $level = if ($p.ExitCode -eq 0) { "notice" } else { "error" }
+          Write-Host "::${level} title=Windows self-test (exit $($p.ExitCode))::$escaped"
+          if ($p.ExitCode -ne 0) { exit 1 }
 
       - name: Self-test the built app (macOS)
         if: runner.os == 'macOS'
