@@ -14,6 +14,11 @@ on:
 permissions:
   contents: write
 
+# a newer push supersedes a build that's still running
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -59,24 +64,42 @@ jobs:
 
       - name: Self-test the built app (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 10
         shell: pwsh
         env:
           LOCALDESK_HOME: ${{ runner.temp }}\selftest
           # CI runners have no GPU and run as a service account where Chromium's sandbox can't start
           QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu --no-sandbox
         run: |
-          $p = Start-Process -FilePath "dist\EVE LocalDesk\EVE LocalDesk.exe" -ArgumentList "--selftest" -Wait -PassThru
+          $exe = "dist\EVE LocalDesk\EVE LocalDesk.exe"
           $log = Join-Path $env:LOCALDESK_HOME "selftest.log"
+          function Run-App($argList) {
+            # wait for the app process itself only (Start-Process -Wait also waits for its children)
+            $p = Start-Process -FilePath $exe -ArgumentList $argList -PassThru
+            if (-not $p.WaitForExit(180000)) { $p.Kill(); return "timeout" }
+            return $p.ExitCode
+          }
+          function Leftovers {
+            Start-Sleep -Seconds 10
+            $left = @(Get-Process QtWebEngineProcess -ErrorAction SilentlyContinue)
+            $left | Stop-Process -Force -ErrorAction SilentlyContinue
+            return $left.Count
+          }
+          function Note($level, $title, $text) {
+            $escaped = $text -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            Write-Host "::${level} title=${title}::$escaped"
+          }
+
+          $code = Run-App @("--selftest")
           $result = if (Test-Path $log) { (Get-Content $log -Raw).Trim() } else { "no selftest.log written" }
-          # as an annotation, so the result is visible on the run page and through the API
-          $escaped = $result -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
-          $level = if ($p.ExitCode -eq 0) { "notice" } else { "error" }
-          Write-Host "::${level} title=Windows self-test (exit $($p.ExitCode))::$escaped"
-          if ($p.ExitCode -ne 0) { exit 1 }
-          # Informational: the regular shutdown path should also exit cleanly (0)
-          $q = Start-Process -FilePath "dist\EVE LocalDesk\EVE LocalDesk.exe" -ArgumentList "--selftest","--normal-exit" -Wait -PassThru
-          $level = if ($q.ExitCode -eq 0) { "notice" } else { "warning" }
-          Write-Host "::${level} title=Windows normal shutdown::exit code $($q.ExitCode)"
+          $left = Leftovers
+          Note ($(if ($code -eq 0) { "notice" } else { "error" })) "Windows self-test (exit $code)" "$result`nbrowser helper processes left 10 s after exit: $left"
+          if ($code -ne 0) { exit 1 }
+
+          # Informational: the regular shutdown path should also exit cleanly without leaving helpers behind
+          $code = Run-App @("--selftest", "--normal-exit")
+          $left = Leftovers
+          Note ($(if ($code -eq 0 -and $left -eq 0) { "notice" } else { "warning" })) "Windows normal shutdown" "exit code $code; browser helper processes left 10 s after exit: $left"
 
       - name: Self-test the built app (macOS)
         if: runner.os == 'macOS'
