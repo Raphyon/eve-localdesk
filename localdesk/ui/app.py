@@ -506,8 +506,11 @@ def hard_exit(code):
     """End the process without running library teardown. On Windows even os._exit lets every DLL run
     its detach code, and QtWebEngine's crashes there (access violation); TerminateProcess skips it.
     Only called once everything is saved and flushed."""
-    sys.stdout.flush()
-    sys.stderr.flush()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
     if sys.platform == "win32":
         try:
             import ctypes
@@ -522,6 +525,23 @@ def hard_exit(code):
         except Exception:
             pass
     os._exit(code)
+
+
+def ensure_output_streams():
+    """A windowed Windows build has no console, so sys.stdout/sys.stderr are None and anything that
+    prints (tracebacks from background tasks included) would itself fail. Send that output to
+    <data dir>/localdesk.log instead, which is also handy when reporting a problem."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        log = open(paths.data_dir() / "localdesk.log", "a", encoding="utf-8", buffering=1)
+    except OSError:
+        log = open(os.devnull, "w")
+    if sys.stdout is None:
+        sys.stdout = log
+    if sys.stderr is None:
+        sys.stderr = log
+    print(f"--- EVE LocalDesk {__version__} started {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
 
 
 def write_selftest(result):
@@ -542,6 +562,7 @@ def build_context():
 
 
 def main():
+    ensure_output_streams()
     if "--selftest" in sys.argv:
         try:
             _main()

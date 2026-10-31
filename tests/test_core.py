@@ -387,3 +387,21 @@ def test_structure_names_from_other_characters_and_custom_names(db):
     syncer.resolve_structures(main, {s2})
     assert len(calls) == before
     assert db.get_name_entries([s2])[s2] == ("Old staging Fortizar", "structure_custom")
+
+
+def test_windowed_build_without_console_streams(tmp_path, monkeypatch):
+    """Windowed Windows builds start with sys.stdout/sys.stderr = None."""
+    import sys
+    from localdesk.ui import app
+    monkeypatch.setenv("LOCALDESK_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    app.ensure_output_streams()
+    import traceback
+    try:
+        raise RuntimeError("background task failed")
+    except RuntimeError:
+        traceback.print_exc()  # what Worker.run does; must not raise
+    sys.stderr.flush()
+    text = (tmp_path / "localdesk.log").read_text()
+    assert "started" in text and "background task failed" in text
