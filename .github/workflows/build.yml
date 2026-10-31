@@ -1,11 +1,14 @@
-# Builds EVE LocalDesk for Windows (installer + portable zip), macOS and Linux.
-# Push a tag like v0.2.0 (matching localdesk/__init__.py) to publish a GitHub release with the downloads,
-# or run it by hand from the Actions tab to just get the files as build artifacts.
+# Builds EVE LocalDesk for Windows (installer + portable zip), macOS and Linux on every push to main.
+# When localdesk/__init__.py has a version that has no GitHub release yet, the release job creates the
+# tag (v<version>) and the release with all downloads. So releasing = bump __version__ and push.
+# Pushing a v* tag yourself or running it from the Actions tab works too.
 name: Build
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    paths-ignore: ["**.md"]
   workflow_dispatch:
 
 permissions:
@@ -104,14 +107,36 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Is this version released yet?
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' localdesk/__init__.py)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "v$version is already released; nothing to publish."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/download-artifact@v4
+        if: steps.version.outputs.new == 'true'
         with:
           path: downloads
           merge-multiple: true
+
       - uses: softprops/action-gh-release@v2
+        if: steps.version.outputs.new == 'true'
         with:
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: EVE LocalDesk ${{ steps.version.outputs.version }}
           files: downloads/*
           generate_release_notes: true

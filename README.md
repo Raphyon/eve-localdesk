@@ -133,12 +133,11 @@ Each build runs the tests, builds the app with PyInstaller (`packaging/eve-local
 app with `--selftest` (checks the icon font, the app icon and that the built-in browser can render a page),
 then packages it. On Windows that means an Inno Setup installer (`packaging/installer.iss`) plus a portable zip.
 
-To publish a release:
+Every push to `main` builds and tests everything; the files appear as build artifacts on the run. To publish
+a release:
 1. Bump `__version__` in `localdesk/__init__.py`, e.g. to `0.3.0`.
-2. Commit, then tag and push: `git tag v0.3.0` and `git push origin v0.3.0`.
-3. The workflow builds everything and attaches the files to a GitHub release for that tag.
-
-To just get test builds, run the workflow by hand from the Actions tab; the files appear as build artifacts.
+2. Commit and push to `main`.
+3. The workflow sees there's no `v0.3.0` release yet, creates the tag and release, and attaches the downloads.
 Building locally: `pip install -r requirements.txt pyinstaller pillow`, then
 `pyinstaller --noconfirm packaging/eve-localdesk.spec`. The output lands in `dist/`. PyInstaller only builds
 for the system it runs on, so a Windows `.exe` needs Windows.
