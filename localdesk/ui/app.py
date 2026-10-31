@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
                 self._selftest_view.deleteLater() if hasattr(self, "_selftest_view") else None
                 QTimer.singleShot(300, lambda: QApplication.instance().exit(code))
             else:
-                os._exit(code)
+                hard_exit(code)
 
         if not login_dialog.AVAILABLE:
             return finish("QtWebEngine (in-app login) missing")
@@ -502,6 +502,22 @@ class MainWindow(QMainWindow):
         SetupDialog(self.ctx, self).exec()
 
 
+def hard_exit(code):
+    """End the process without running library teardown. On Windows even os._exit lets every DLL run
+    its detach code, and QtWebEngine's crashes there (access violation); TerminateProcess skips it.
+    Only called once everything is saved and flushed."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            kernel32.TerminateProcess(kernel32.GetCurrentProcess(), code)
+        except Exception:
+            pass
+    os._exit(code)
+
+
 def write_selftest(result):
     """Self-test result on stdout and in <data dir>/selftest.log (a windowed Windows build has no stdout)."""
     line = f"SELFTEST {result}"
@@ -527,7 +543,7 @@ def main():
             if isinstance(e, SystemExit):
                 raise
             write_selftest("CRASHED:\n" + traceback.format_exc())
-            os._exit(2)
+            hard_exit(2)
     else:
         _main()
 
@@ -556,6 +572,4 @@ def _main():
     from . import login_dialog
     login_dialog.shutdown()
     window.deleteLater()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(code)
+    hard_exit(code)
