@@ -511,7 +511,13 @@ def hard_exit(code):
     if sys.platform == "win32":
         try:
             import ctypes
-            kernel32 = ctypes.windll.kernel32
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            # declare the types: an undeclared 64-bit HANDLE gets truncated and the call silently fails
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.GetCurrentProcess.argtypes = []
+            kernel32.TerminateProcess.restype = wintypes.BOOL
+            kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
             kernel32.TerminateProcess(kernel32.GetCurrentProcess(), code)
         except Exception:
             pass
