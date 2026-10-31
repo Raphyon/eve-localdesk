@@ -1,0 +1,8 @@
+*.egg-info/
+*.pyc
+.pytest_cache/
+.venv/
+__pycache__/
+build/
+dist/
+esi-credentials.json
