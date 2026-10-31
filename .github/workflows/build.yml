@@ -61,10 +61,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          QT_QPA_PLATFORM: offscreen
           LOCALDESK_HOME: ${{ runner.temp }}\selftest
+          QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
         run: |
           $p = Start-Process -FilePath "dist\EVE LocalDesk\EVE LocalDesk.exe" -ArgumentList "--selftest" -Wait -PassThru
+          $log = Join-Path $env:LOCALDESK_HOME "selftest.log"
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "no selftest.log written" }
           if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
 
       - name: Self-test the built app (macOS)

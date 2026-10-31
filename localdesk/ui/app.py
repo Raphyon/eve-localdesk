@@ -294,7 +294,7 @@ class MainWindow(QMainWindow):
         def finish(extra=None):
             if extra:
                 problems.append(extra)
-            print("SELFTEST", "OK" if not problems else "FAILED: " + "; ".join(problems), flush=True)
+            write_selftest("OK" if not problems else "FAILED: " + "; ".join(problems))
             QApplication.instance().exit(1 if problems else 0)
 
         if not login_dialog.AVAILABLE:
@@ -493,6 +493,16 @@ class MainWindow(QMainWindow):
         SetupDialog(self.ctx, self).exec()
 
 
+def write_selftest(result):
+    """Self-test result on stdout and in <data dir>/selftest.log (a windowed Windows build has no stdout)."""
+    line = f"SELFTEST {result}"
+    print(line, flush=True)
+    try:
+        (paths.data_dir() / "selftest.log").write_text(line + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def build_context():
     db = Database(paths.db_path())
     esi = ESI(db)
@@ -501,6 +511,19 @@ def build_context():
 
 
 def main():
+    if "--selftest" in sys.argv:
+        try:
+            _main()
+        except BaseException as e:
+            if isinstance(e, SystemExit):
+                raise
+            write_selftest("CRASHED:\n" + traceback.format_exc())
+            os._exit(2)
+    else:
+        _main()
+
+
+def _main():
     if sys.platform == "win32":
         # Own taskbar entry and icon instead of being grouped under python.exe
         try:
