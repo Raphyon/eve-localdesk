@@ -73,6 +73,10 @@ jobs:
           $level = if ($p.ExitCode -eq 0) { "notice" } else { "error" }
           Write-Host "::${level} title=Windows self-test (exit $($p.ExitCode))::$escaped"
           if ($p.ExitCode -ne 0) { exit 1 }
+          # Informational: the regular shutdown path should also exit cleanly (0)
+          $q = Start-Process -FilePath "dist\EVE LocalDesk\EVE LocalDesk.exe" -ArgumentList "--selftest","--normal-exit" -Wait -PassThru
+          $level = if ($q.ExitCode -eq 0) { "notice" } else { "warning" }
+          Write-Host "::${level} title=Windows normal shutdown::exit code $($q.ExitCode)"
 
       - name: Self-test the built app (macOS)
         if: runner.os == 'macOS'

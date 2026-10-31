@@ -295,13 +295,22 @@ class MainWindow(QMainWindow):
             if extra:
                 problems.append(extra)
             write_selftest("OK" if not problems else "FAILED: " + "; ".join(problems))
-            QApplication.instance().exit(1 if problems else 0)
+            code = 1 if problems else 0
+            if "--normal-exit" in sys.argv:
+                # also exercise the regular shutdown path (used by CI to spot crashes on exit)
+                self._selftest_view.deleteLater() if hasattr(self, "_selftest_view") else None
+                QTimer.singleShot(300, lambda: QApplication.instance().exit(code))
+            else:
+                os._exit(code)
 
         if not login_dialog.AVAILABLE:
             return finish("QtWebEngine (in-app login) missing")
-        # Render a page to prove the embedded browser's helper process is bundled too.
+        # Render a page with the login window's browser profile, to prove the embedded browser's helper
+        # process is bundled and that the profile shuts down cleanly.
+        from PySide6.QtWebEngineCore import QWebEnginePage
         from PySide6.QtWebEngineWidgets import QWebEngineView
         self._selftest_view = view = QWebEngineView()
+        view.setPage(QWebEnginePage(login_dialog.profile(), view))
         done = []
 
         def loaded(ok):
@@ -541,6 +550,12 @@ def _main():
     window = MainWindow(ctx)
     window.show()
     code = app.exec()
-    if "--selftest" in sys.argv:
-        os._exit(code)  # don't wait for background network tasks
-    sys.exit(code)
+    # Shut the embedded browser down in a known order, then exit straight away: Python's own teardown
+    # can crash QtWebEngine on Windows, and background network tasks needn't finish (all data is
+    # already committed to the database as it arrives).
+    from . import login_dialog
+    login_dialog.shutdown()
+    window.deleteLater()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)

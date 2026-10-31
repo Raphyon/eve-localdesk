@@ -104,3 +104,18 @@ class LoginDialog(QDialog):
         self.page.deleteLater()
         self.page = None
         super().done(result)
+
+
+def shutdown():
+    """Delete the login browser profile before Qt shuts down. Leaving it to Python's own teardown can
+    crash QtWebEngine on exit (seen on Windows)."""
+    global _profile, _interceptor
+    if _profile is None:
+        return
+    try:
+        import shiboken6
+        _profile.setUrlRequestInterceptor(None)
+        shiboken6.delete(_profile)
+    except Exception:
+        pass
+    _profile = _interceptor = None
