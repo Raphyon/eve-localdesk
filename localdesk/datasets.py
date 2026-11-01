@@ -12,6 +12,7 @@ class Col:
     header: str
     get: object               # callable(row) -> raw value, or a key name
     kind: str = "text"
+    optional: bool = False    # hidden until turned on (right-click the table header)
 
     def value(self, row):
         return self.get(row) if callable(self.get) else row.get(self.get)
@@ -52,29 +53,30 @@ ORDER_COLS = [
     Col("Issued", "issued", "date"), Col("Item", "type_id", "type"),
     Col("Buy/Sell", lambda r: "Buy" if r.get("is_buy_order") else "Sell", "badge"),
     Col("Price", "price", "isk"), Col("Remaining", "volume_remain", "int"), Col("Total", "volume_total", "int"),
-    Col("Location", "location_id", "location"), Col("Range", "range"), Col("Duration (d)", "duration", "int"),
+    Col("Location", "location_id", "location"), Col("Range", "range", optional=True), Col("Duration (d)", "duration", "int", optional=True),
     Col("State", lambda r: r.get("state", "active"), "badge"),
 ]
 CONTRACT_COLS = [
     Col("Issued", "date_issued", "date"), Col("Type", "type"), Col("Status", "status", "badge"), Col("Title", "title"),
     Col("Issuer", "issuer_id", "name"), Col("Assignee", "assignee_id", "name"),
-    Col("Acceptor", "acceptor_id", "name"), Col("Price", "price", "isk"), Col("Reward", "reward", "isk"),
-    Col("Collateral", "collateral", "isk"), Col("Volume m³", "volume", "float"),
-    Col("From", "start_location_id", "location"), Col("To", "end_location_id", "location"),
+    Col("Acceptor", "acceptor_id", "name", optional=True), Col("Price", "price", "isk"),
+    Col("Reward", "reward", "isk", optional=True), Col("Collateral", "collateral", "isk", optional=True),
+    Col("Volume m³", "volume", "float", optional=True),
+    Col("From", "start_location_id", "location"), Col("To", "end_location_id", "location", optional=True),
     Col("Expires", "date_expired", "date"),
 ]
 JOB_COLS = [
     Col("Activity", lambda r: ACTIVITIES.get(r.get("activity_id"), r.get("activity_id"))),
     Col("Blueprint", "blueprint_type_id", "type"), Col("Product", "product_type_id", "type"),
-    Col("Runs", "runs", "int"), Col("Status", "status", "badge"), Col("Installer", "installer_id", "name"),
-    Col("Started", "start_date", "date"), Col("Ends", "end_date", "date"),
-    Col("Facility", "facility_id", "location"), Col("Cost", "cost", "isk"),
+    Col("Runs", "runs", "int"), Col("Status", "status", "badge"), Col("Installer", "installer_id", "name", optional=True),
+    Col("Started", "start_date", "date", optional=True), Col("Ends", "end_date", "date"),
+    Col("Facility", "facility_id", "location"), Col("Cost", "cost", "isk", optional=True),
 ]
 JOURNAL_COLS = [
     Col("Date", "date", "date"), Col("Type", lambda r: (r.get("ref_type") or "").replace("_", " ")),
     Col("Amount", "amount", "isk"), Col("Balance", "balance", "isk"),
     Col("First party", "first_party_id", "name"), Col("Second party", "second_party_id", "name"),
-    Col("Description", "description"), Col("Reason", "reason"),
+    Col("Description", "description"), Col("Reason", "reason", optional=True),
 ]
 
 DATASETS = [
@@ -85,7 +87,7 @@ DATASETS = [
                 Col("Unit price", "unit_price", "isk"), Col("Total", _total, "isk"),
                 Col("Buy/Sell", lambda r: "Buy" if r.get("is_buy") else "Sell", "badge"),
                 Col("Client", "client_id", "name"), Col("Location", "location_id", "location"),
-                Col("Personal", "is_personal", "bool")]),
+                Col("Personal", "is_personal", "bool", optional=True)]),
     Dataset("orders", "Market orders (open)", "Character", "/characters/{cid}/orders/",
             "esi-markets.read_character_orders.v1", ORDER_COLS),
     Dataset("order_history", "Market orders (history)", "Character", "/characters/{cid}/orders/history/",
@@ -100,7 +102,7 @@ DATASETS = [
                 Col("Kind", lambda r: "Original" if r.get("runs") == -1 else "Copy"),
                 Col("ME", "material_efficiency", "int"), Col("TE", "time_efficiency", "int"),
                 Col("Runs", lambda r: None if r.get("runs") == -1 else r.get("runs"), "int"),
-                Col("Location", "location_id", "location"), Col("Flag", "location_flag")], paged=True),
+                Col("Location", "location_id", "location"), Col("Flag", "location_flag", optional=True)], paged=True),
     Dataset("mining", "Mining ledger", "Character", "/characters/{cid}/mining/",
             "esi-industry.read_character_mining.v1", [
                 Col("Date", "date", "date"), Col("System", "solar_system_id", "name"),
@@ -111,15 +113,16 @@ DATASETS = [
                 Col("Time", "time", "date"), Col("Kill/Loss", lambda r: "Loss" if r.get("loss") else "Kill", "badge"),
                 Col("Victim", "victim_id", "name"), Col("Victim corp", "victim_corp_id", "name"),
                 Col("Ship", "ship_type_id", "type"), Col("System", "system_id", "name"),
-                Col("Attackers", "attackers", "int"), Col("Final blow", "final_blow_id", "name"),
-                Col("Est. ship value", "ship_value", "isk"), Col("Killmail ID", "killmail_id")],
+                Col("Attackers", "attackers", "int"), Col("Final blow", "final_blow_id", "name", optional=True),
+                Col("Est. ship value", "ship_value", "isk"), Col("Killmail ID", "killmail_id", optional=True)],
             paged=True, hook="hook_killmails", actions=[("Open on zKillboard", "open_zkill")]),
     Dataset("planets", "Planetary industry", "Character", "/characters/{cid}/planets/",
             "esi-planets.manage_planets.v1", [
                 Col("Planet", "planet_id", "name"), Col("Type", "planet_type"),
                 Col("System", "solar_system_id", "name"), Col("CC level", "upgrade_level", "int"),
                 Col("Structures", "num_pins", "int"), Col("Extractors", "extractors", "int"),
-                Col("Extractors expire", "extractor_expiry", "date"), Col("Last update", "last_update", "date")],
+                Col("Extractors expire", "extractor_expiry", "date"),
+                Col("Last update", "last_update", "date", optional=True)],
             hook="hook_planets", note="Extractor expiry times come from each colony's layout. ESI only "
                                       "updates a colony after you view it in game."),
     Dataset("standings", "Standings (NPC)", "Character", "/characters/{cid}/standings/",
@@ -132,7 +135,7 @@ DATASETS = [
             "esi-characters.read_agents_research.v1", [
                 Col("Agent", "agent_id", "name"), Col("Field", "skill_type_id", "type"),
                 Col("Started", "started_at", "date"), Col("Points/day", "points_per_day", "float"),
-                Col("Remainder", "remainder_points", "float")]),
+                Col("Remainder", "remainder_points", "float", optional=True)]),
     Dataset("notifications", "Notifications", "Character", "/characters/{cid}/notifications/",
             "esi-characters.read_notifications.v1", [
                 Col("Time", "timestamp", "date"), Col("Type", "type"), Col("Sender", "sender_id", "name"),
@@ -161,7 +164,7 @@ DATASETS = [
             "esi-corporations.read_structures.v1", [
                 Col("Name", "name"), Col("Type", "type_id", "type"), Col("System", "system_id", "name"),
                 Col("State", "state", "badge"), Col("Fuel expires", "fuel_expires", "date"),
-                Col("Reinforce hour", "reinforce_hour", "int"),
+                Col("Reinforce hour", "reinforce_hour", "int", optional=True),
                 Col("Services", lambda r: ", ".join(f"{s['name']} ({s['state']})" for s in r.get("services", [])))],
             paged=True, note="Requires the Station Manager role."),
     Dataset("corp_members", "Member tracking", "Corporation", "/corporations/{corp}/membertracking/",
@@ -185,11 +188,30 @@ DATASETS = [
     Dataset("corp_orders", "Market orders", "Corporation", "/corporations/{corp}/orders/",
             "esi-markets.read_corporation_orders.v1", ORDER_COLS, paged=True,
             note="Requires the Accountant or Trader role."),
+    Dataset("corp_blueprints", "Blueprints", "Corporation", "/corporations/{corp}/blueprints/",
+            "esi-corporations.read_blueprints.v1", [
+                Col("Blueprint", "type_id", "type"),
+                Col("Kind", lambda r: "Original" if r.get("runs") == -1 else "Copy"),
+                Col("ME", "material_efficiency", "int"), Col("TE", "time_efficiency", "int"),
+                Col("Runs", lambda r: None if r.get("runs") == -1 else r.get("runs"), "int"),
+                Col("Location", "location_id", "location"), Col("Flag", "location_flag", optional=True)],
+            paged=True, note="Requires the Director role."),
+    Dataset("corp_customs", "Customs offices", "Corporation", "/corporations/{corp}/customs_offices/",
+            "esi-planets.read_customs_offices.v1", [
+                Col("System", "system_id", "name"), Col("Office", "office_id", optional=True),
+                Col("Corp tax", lambda r: (r.get("corporation_tax_rate") or 0) * 100, "float"),
+                Col("Alliance tax", lambda r: (r.get("alliance_tax_rate") or 0) * 100 if r.get("allow_alliance_access")
+                    else None, "float"),
+                Col("Standing access", lambda r: r.get("standing_level", "").replace("_", " ")
+                    if r.get("allow_access_with_standings") else "no"),
+                Col("Reinforce", lambda r: f"{r.get('reinforce_exit_start', 0):02d}–{r.get('reinforce_exit_end', 0):02d}h"),
+            ], paged=True, note="Requires the Director role. Tax rates in %."),
     Dataset("corp_extractions", "Moon extractions", "Corporation", "/corporation/{corp}/mining/extractions/",
             "esi-industry.read_corporation_mining.v1", [
                 Col("Moon", "moon_id", "name"), Col("Refinery", "structure_id", "location"),
                 Col("Chunk arrives", "chunk_arrival_time", "date"), Col("Auto-fracture", "natural_decay_time", "date"),
-                Col("Started", "extraction_start_time", "date")], note="Requires the Station Manager role."),
+                Col("Started", "extraction_start_time", "date", optional=True)],
+            note="Requires the Station Manager role."),
 ]
 
 BY_KEY = {d.key: d for d in DATASETS}

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QHeaderView, QInputDialog
 from .. import paths
 from ..sso import SCOPES
 from ..sync import location_kind
-from ..model import ROMAN, fmt_duration, fmt_isk, fmt_sp, fmt_time, parse_time
+from ..model import ROMAN, fmt_duration, fmt_isk, fmt_sp, fmt_time, fmt_time_short, parse_time
 from .. import alerts
 from .theme import ACCENT
 from .widgets import (USER_ROLE, Card, InfoBox, Page, SortItem, TreeItem, fill_table, avatar_placeholder, isk_color, make_table, muted, round_pixmap, sec_color, sec_text)
@@ -30,8 +30,7 @@ class DashboardPage(Page):
     title = "Dashboard"
     icon = "fa5s.tachometer-alt"
     section = "Overview"
-    HEADERS = ["Character", "Corporation", "Location", "Sec", "Ship", "Wallet", "Total SP", "Training",
-               "Skill done in", "Queue ends", "Unread", "Last sync"]
+    HEADERS = ["Character", "Location", "Sec", "Ship", "Wallet", "SP", "Training", "Mail"]
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -48,7 +47,7 @@ class DashboardPage(Page):
         lay.addLayout(boxes)
         card = Card("Characters", accent="primary", margins=0)
         card.add_tool(muted("Double-click a character to open their sheet", wrap=False))
-        self.table = make_table(self.HEADERS)
+        self.table = make_table(self.HEADERS, stretch=6, prefs_key="dashboard")
         self.table.cellDoubleClicked.connect(self._open)
         card.add(self.table, 1)
         self.empty = _placeholder("No characters yet.\n\nClick the cog (top right) to enter your EVE application's "
@@ -67,27 +66,35 @@ class DashboardPage(Page):
             isk += s["wallet"] or 0
             sp += s["sp"] or 0
             tr = s["training"]
-            tr_badge = {"training": None, "paused": ACCENT["warning"], "empty": ACCENT["danger"],
-                        "done": ACCENT["danger"]}[tr["state"]]
-            low_queue = tr["end"] is not None and tr["end"] - now < 86400
-            online = " ●" if s["online"] else ""
+            loc = s["location"]
+            if tr["state"] == "training":
+                left = fmt_duration(tr["current_end"] - now)
+                queue_left = tr["end"] - now
+                training = SortItem(tr["text"], tr["current_end"] or 0,
+                                    sub=f"{left} left · queue {fmt_duration(queue_left)}",
+                                    color=ACCENT["orange"] if queue_left < 86400 else None,
+                                    tip=f"Queue ends {fmt_time(tr['end'])}"
+                                        + (" (less than 24h of training left)" if queue_left < 86400 else ""))
+            else:
+                training = SortItem(tr["text"], 0, badge=ACCENT["warning"] if tr["state"] == "paused"
+                                    else ACCENT["danger"])
+            corp = s["corporation"] + (f" [{s['alliance']}]" if s["alliance"] else "")
+            ship_type, _, ship_name = s["ship"].partition(" — ")
             rows.append([
-                SortItem(s["name"] + online, s["name"].lower(), data=s["id"], bold=bool(s["online"]),
-                         tip="Online" if s["online"] else None),
-                SortItem(s["corporation"] + (f" [{s['alliance']}]" if s["alliance"] else "")),
-                SortItem(s["location"]["text"]),
+                SortItem(("● " if s["online"] else "") + s["name"], s["name"].lower(), data=s["id"],
+                         bold=bool(s["online"]), sub=corp,
+                         tip=f"{'Online · ' if s['online'] else ''}last synced {fmt_time(s['last_sync'])}"),
+                SortItem(loc["system"], sub=loc["docked"] or "in space",
+                         tip=loc["docked"] or f"{loc['system']} (in space)"),
                 sec_item(s["security"]),
-                SortItem(s["ship"]),
-                SortItem(fmt_isk(s["wallet"]), s["wallet"] or 0, right=True),
-                SortItem(fmt_sp(s["sp"]), s["sp"] or 0, right=True),
-                SortItem(tr["text"], badge=tr_badge),
-                SortItem(fmt_duration(tr["current_end"] - now) if tr["current_end"] else "—",
-                         tr["current_end"] or 0, right=True),
-                SortItem(fmt_time(tr["end"]), tr["end"] or 0, color=ACCENT["orange"] if low_queue else None,
-                         tip="Less than 24h of training left" if low_queue else None),
-                SortItem(s["unread"] if s["unread"] else "", s["unread"] or 0, badge=ACCENT["primary"]
-                         if s["unread"] else None),
-                SortItem(fmt_time(s["last_sync"]), s["last_sync"] or 0),
+                SortItem(ship_type, sub=ship_name or None),
+                SortItem(fmt_isk(s["wallet"]), s["wallet"] or 0, right=True,
+                         tip=f"{s['wallet']:,.2f} ISK" if s["wallet"] is not None else None),
+                SortItem(fmt_isk(s["sp"]).replace(".00", ".0") if s["sp"] else "—", s["sp"] or 0, right=True,
+                         tip=f"{fmt_sp(s['sp'])} skill points" if s["sp"] else None),
+                training,
+                SortItem(s["unread"] if s["unread"] else "", s["unread"] or 0,
+                         badge=ACCENT["primary"] if s["unread"] else None),
             ])
         fill_table(self.table, rows)
         unread = sum((self.ctx.view.get(c["character_id"], "mail_labels") or {}).get("total_unread_count") or 0
@@ -286,7 +293,7 @@ class CharacterPage(Page):
             ts = parse_time(j.get("date"))
             amount = j.get("amount", 0) or 0
             rows.append([
-                SortItem(fmt_time(ts), ts),
+                SortItem(fmt_time_short(ts), ts, tip=fmt_time(ts)),
                 SortItem(j.get("ref_type", "").replace("_", " ")),
                 SortItem(f"{amount:,.2f}", amount, color=isk_color(amount), right=True),
                 SortItem(f"{j.get('balance', 0) or 0:,.2f}", j.get("balance", 0) or 0, right=True),
@@ -462,6 +469,7 @@ from .client_settings import ClientSettingsPage  # noqa: E402
 from .data_browser import DataBrowserPage  # noqa: E402
 from .alerts_page import AlertsPage  # noqa: E402
 from .navigation import NavigationPage  # noqa: E402
+from .corporation import CorporationPage  # noqa: E402
 
 PAGES = [DashboardPage, AlertsPage, CharacterPage, AssetsPage, NavigationPage, MailPage, ContactsPage,
-         DataBrowserPage, ClientSettingsPage, LogPage]
+         DataBrowserPage, CorporationPage, ClientSettingsPage, LogPage]

@@ -4,10 +4,11 @@ import webbrowser
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import (QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QSplitter, QTreeWidget,
+                               QTreeWidgetItem)
 
 from ..datasets import BY_KEY, DATASETS
-from ..model import fmt_time, parse_time
+from ..model import fmt_time, fmt_time_short, parse_time
 from .widgets import (USER_ROLE, Card, Page, SortItem, button, fill_table, isk_color, make_table, muted,
                       standing_color, status_color)
 
@@ -44,7 +45,7 @@ class DataBrowserPage(Page):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(14)
         modules = Card("Modules", margins=0)
-        modules.setFixedWidth(250)
+        modules.setMinimumWidth(170)
         self.nav = QTreeWidget()
         self.nav.setHeaderHidden(True)
         self.nav.setIndentation(14)
@@ -66,7 +67,11 @@ class DataBrowserPage(Page):
         self.nav.expandAll()
         self.nav.currentItemChanged.connect(lambda *_: self.refresh_view())
         modules.add(self.nav, 1)
-        lay.addWidget(modules)
+        split = QSplitter()
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(10)
+        split.addWidget(modules)
+        lay.addWidget(split)
 
         self.card = Card("—", accent="primary", margins=0)
         self.count = muted(wrap=False)
@@ -94,7 +99,9 @@ class DataBrowserPage(Page):
         self.card.add(self.note)
         self.table = make_table(["—"])
         self.card.add(self.table, 1)
-        lay.addWidget(self.card, 1)
+        split.addWidget(self.card)
+        split.setStretchFactor(1, 1)
+        split.setSizes([205, 1000])
         self._rows = []
         self._action_buttons = []
         self.nav.setCurrentItem(groups["Character"].child(0))
@@ -159,9 +166,10 @@ class DataBrowserPage(Page):
             if len(table_rows) >= MAX_ROWS:
                 break
         self.table.setSortingEnabled(False)
-        self.table.clear()
-        self.table.setColumnCount(len(headers))
-        self.table.setHorizontalHeaderLabels(headers)
+        self.table.setRowCount(0)
+        self.table.set_headers(headers, prefs_key=f"data:{ds.key}",
+                               optional=[c.header for c in ds.cols if c.optional])
+        self.table.setSortingEnabled(True)
         fill_table(self.table, table_rows)
         date_col = next((i for i, c in enumerate(ds.cols, 1) if c.kind == "date"), None)
         if date_col is not None:
@@ -169,6 +177,8 @@ class DataBrowserPage(Page):
 
         self.card.set_title(ds.title if ds.group == "Character" else f"Corporation · {ds.title}")
         notes = [ds.note] if ds.note else []
+        if any(c.optional for c in ds.cols):
+            notes.append("Right-click a column header to show or hide columns.")
         if no_access:
             reason = "missing corp role or scope" if ds.corp else f"scope {ds.scope} not granted"
             notes.append(f"No access for: {', '.join(no_access)} ({reason}).")
@@ -185,7 +195,7 @@ class DataBrowserPage(Page):
             color = None
             if any(w in col.header.lower() for w in DEADLINE_WORDS):
                 color = "#dc3545" if ts < now else "#fd7e14" if ts - now < 48 * 3600 else None
-            return SortItem(fmt_time(ts), ts, color=color)
+            return SortItem(fmt_time_short(ts), ts, color=color, tip=fmt_time(ts))
         if kind == "isk":
             color = isk_color(raw) if col.header in ("Amount", "Total") else None
             return SortItem(f"{raw:,.2f}", raw, right=True, color=color)

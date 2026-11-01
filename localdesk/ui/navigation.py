@@ -181,7 +181,7 @@ class NavigationPage(Page):
 
     # --- tabs -----------------------------------------------------------------
     def _fleet_tab(self):
-        self.fleet = make_table(["Character", "System", "Sec", "Region", "Docked at", "Ship", "Online"], stretch=4)
+        self.fleet = make_table(["Character", "System", "Sec", "Docked at", "Online"], stretch=3, prefs_key="fleet")
         self.fleet.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.fleet.customContextMenuRequested.connect(lambda pos: self._table_menu(self.fleet, pos, col=1))
         return self.fleet
@@ -545,8 +545,9 @@ class NavigationPage(Page):
             s = v.summary(ch["character_id"])
             loc = s["location"]
             sid = loc["system_id"]
-            rows.append([s["name"], SortItem(loc["system"], data=sid), sec_item(s["security"]),
-                         u.region_name(sid) if u and sid else "", loc["docked"] or "(in space)", s["ship"],
+            rows.append([SortItem(s["name"], sub=s["ship"]),
+                         SortItem(loc["system"], data=sid, sub=u.region_name(sid) if u and sid else None),
+                         sec_item(s["security"]), loc["docked"] or "(in space)",
                          SortItem("Online" if s["online"] else "Offline",
                                   badge=ACCENT["success"] if s["online"] else ACCENT["secondary"])])
         fill_table(self.fleet, rows)

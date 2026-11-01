@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QMessageBox,
                                QPlainTextEdit, QSplitter, QTextBrowser)
 
-from ..model import fmt_time, parse_time
+from ..model import fmt_time, fmt_time_short, parse_time
 from ..sync import S_MAIL, S_ORGANIZE_MAIL, S_SEND_MAIL
 from .widgets import USER_ROLE, Card, Page, SortItem, button, fill_table, make_table, muted
 
@@ -116,7 +116,7 @@ class MailPage(Page):
             to = ", ".join(v.name(r["recipient_id"]) for r in m.get("recipients", [])[:3])
             if len(m.get("recipients", [])) > 3:
                 to += ", …"
-            rows.append([SortItem(fmt_time(ts), ts, data=m["mail_id"], bold=unread),
+            rows.append([SortItem(fmt_time_short(ts), ts, data=m["mail_id"], bold=unread, tip=fmt_time(ts)),
                          SortItem(v.name(m.get("from")), bold=unread),
                          SortItem(to),
                          SortItem(m.get("subject", ""), bold=unread)])

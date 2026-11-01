@@ -24,6 +24,8 @@ S_ORGANIZE_MAIL = "esi-mail.organize_mail.v1"
 S_STRUCTURES = "esi-universe.read_structures.v1"
 S_WAYPOINT = "esi-ui.write_waypoint.v1"
 S_SEARCH_STRUCTURES = "esi-search.search_structures.v1"
+S_CORP_MINING = "esi-industry.read_corporation_mining.v1"
+CORP_MINING_INTERVAL = 3600  # one character per corporation refreshes the ledger at most this often
 
 # Structure names are "<System> - <Name>" and Ansiblex gates "<A> » <B> - <Name>", so these searches
 # return the structures (and jump bridges) a character has access to. ESI wants 3+ characters.
@@ -130,6 +132,7 @@ class Syncer:
         for ds in DATASETS:
             if ds.scope is None or ds.scope in ch["scopes"]:
                 step(ds.title.lower(), lambda ds=ds: self.sync_dataset(cid, ds, force))
+        step("corporation", lambda: self.sync_corporation(cid, force))
         if S_SEARCH_STRUCTURES in ch["scopes"] and S_STRUCTURES in ch["scopes"]:
             step("structure access", lambda: self.scan_access(cid, force))
         loc = self.db.cache_get(cid, "location") or {}
@@ -171,6 +174,53 @@ class Syncer:
         if ds.single:
             return [data] if data else []
         return data or []
+
+    # --- corporation ---------------------------------------------------------
+    def corp_of(self, cid):
+        return (self.db.cache_get(cid, "info") or {}).get("corporation_id")
+
+    def sync_corporation(self, cid, force=False):
+        corp = self.corp_of(cid)
+        if not corp or corp < 2_000_000:  # NPC corporations have nothing to track
+            return
+        info = self.fetch(0, f"corp_info:{corp}", f"/corporations/{corp}/", auth=False, force=force, ttl=86400)
+        self.resolve([info.get("ceo_id"), info.get("alliance_id"), corp])
+        if self.has_scope(cid, S_CORP_MINING):
+            self.sync_corp_mining(cid, corp, force)
+
+    def sync_corp_mining(self, cid, corp, force=False):
+        """Moon-mining ledger from the corporation's refineries. ESI only keeps the last 30 days, so every
+        entry is merged into a local history that grows for as long as the app keeps syncing."""
+        marker = self.db.cache_row(0, f"corp_mining_synced:{corp}")
+        if marker and not force and marker["expires_at"] > time.time():
+            return
+        try:
+            observers, _ = self.esi.get_paged(f"/corporation/{corp}/mining/observers/", cid)
+        except ESIError as e:
+            if e.status in (401, 403):  # this character lacks the Accountant role; another may have it
+                self.db.cache_put(cid, "corp_mining_access", {"no_access": True}, time.time() + NO_ACCESS_TTL)
+                return
+            raise
+        history = self.db.cache_get(0, f"corp_mining:{corp}") or {"entries": {}, "observers": {}}
+        ids, types, structures = set(), set(), set()
+        for obs in observers:
+            oid = obs["observer_id"]
+            rows, _ = self.esi.get_paged(f"/corporation/{corp}/mining/observers/{oid}/", cid)
+            for r in rows:
+                key = f"{oid}|{r['character_id']}|{r['type_id']}|{r['last_updated']}"
+                history["entries"][key] = {"observer": oid, "character_id": r["character_id"],
+                                           "corp_id": r.get("recorded_corporation_id"), "type_id": r["type_id"],
+                                           "quantity": r["quantity"], "date": r["last_updated"]}
+                ids.update([r["character_id"], r.get("recorded_corporation_id")])
+                types.add(r["type_id"])
+            history["observers"][str(oid)] = {"type": obs.get("observer_type"), "last_updated": obs.get("last_updated")}
+            structures.add(oid)
+        self.db.cache_put(0, f"corp_mining:{corp}", history, time.time() + 3650 * 86400)
+        self.db.cache_put(0, f"corp_mining_synced:{corp}", True, time.time() + CORP_MINING_INTERVAL)
+        self.db.cache_put(cid, "corp_mining_access", {"ok": True}, time.time() + 3650 * 86400)
+        self.resolve(ids | types)
+        if structures:
+            self.resolve_structures(cid, structures)
 
     # --- docking access & jump bridges -------------------------------------
     def scan_access(self, cid, force=False):

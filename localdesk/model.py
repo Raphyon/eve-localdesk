@@ -17,6 +17,14 @@ def fmt_time(ts, with_seconds=False):
     return time.strftime("%Y-%m-%d %H:%M" + (":%S" if with_seconds else ""), time.localtime(ts))
 
 
+def fmt_time_short(ts):
+    """'30 Oct 13:59' this year, '30 Oct 2025' otherwise: short enough for table columns."""
+    if not ts:
+        return "—"
+    t = time.localtime(ts)
+    return time.strftime("%d %b %H:%M" if t.tm_year == time.localtime().tm_year else "%d %b %Y", t)
+
+
 def fmt_isk(v):
     if v is None:
         return "—"

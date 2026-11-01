@@ -405,3 +405,17 @@ def test_windowed_build_without_console_streams(tmp_path, monkeypatch):
     sys.stderr.flush()
     text = (tmp_path / "localdesk.log").read_text()
     assert "started" in text and "background task failed" in text
+
+
+def test_fit_widths_shrinks_widest_columns_first():
+    from localdesk.ui.widgets import fit_widths
+    assert fit_widths([100, 200, 300], 1000) == [100, 200, 300]   # fits: unchanged
+    w = fit_widths([100, 200, 600], 600)
+    assert sum(w) <= 600 and w[0] == 100 and w[1] == 200 and w[2] == 300   # only the widest shrinks
+    w = fit_widths([300, 300, 300], 300)
+    assert sum(w) <= 300 and len(set(w)) == 1
+    # per-column minimums: the badge column (min 110) keeps its width, free text gives way
+    w = fit_widths([110, 400, 90], 400, [110, 90, 90])
+    assert w[0] == 110 and w[2] == 90 and sum(w) <= 400
+    # minimums don't fit: return them (the table scrolls as a last resort)
+    assert fit_widths([200, 200], 100, [120, 120]) == [120, 120]

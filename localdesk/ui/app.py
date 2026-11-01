@@ -16,7 +16,7 @@ from ..esi import ESI
 from ..model import DataView
 from ..sync import Syncer
 from . import theme
-from .widgets import avatar_placeholder, button, fill_char_combo, round_pixmap
+from .widgets import avatar_placeholder, button, fill_char_combo, round_pixmap, set_prefs_store
 
 SYNC_INTERVAL_MS = 15 * 60 * 1000
 
@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
         from .pages import PAGES  # imported here so pages can import this module's helpers
         ctx.window = self
         self.ctx = ctx
+        set_prefs_store(ctx.db.get_setting, ctx.db.set_setting)
         self.pool = QThreadPool.globalInstance()
         self._workers = set()
         self._syncing = False
@@ -288,7 +289,7 @@ class MainWindow(QMainWindow):
             problems.append("icon font (qtawesome) missing")
         if self.windowIcon().isNull():
             problems.append("app icon missing")
-        if len(self.pages) < 10:
+        if len(self.pages) < 11:
             problems.append("pages missing")
 
         def finish(extra=None):

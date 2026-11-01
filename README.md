@@ -18,10 +18,13 @@ light/dark toggle (moon icon, top right).
 | **Contacts** | View contacts; **sync contacts between characters** (add missing / also update standings / mirror exactly), with a preview of every change before applying |
 | **Client settings** *(not in SeAT)* | **Copy overview + window layout** (core_char) between characters, and account-wide settings (core_user) between accounts. Automatic backups and one-click restore |
 | **Data browser** | Sortable, filterable tables (one character or all of them) for: wallet transactions, market orders and history, contracts, industry jobs, blueprints, mining ledger with value, killmails (with zKillboard links), planetary industry with extractor expiry, NPC standings, loyalty points, research agents, notifications, saved fittings (**copy as EFT**), calendar, medals, jump fatigue, employment history |
-| **Corporation** | If one of your characters has the in-game roles: structures and fuel, member tracking, wallet divisions, master wallet journal, contracts, industry jobs, market orders, moon extractions |
+| **Corporation** | A page per corporation you're in: **overview** (ticker, CEO, tax, members, combined wallets, structures with fuel left, upcoming moon chunks), **mining ledger** (moon mining per character, ore, structure or day, with estimated value and a **mining tax** calculator, copy as CSV; history is kept locally beyond ESI's 30 days), **member activity** (active in 7/30 days, inactive). The Data browser adds structures, members, wallets and journal, contracts, industry jobs, market orders, blueprints, customs offices and moon extractions. Needs characters with the matching in-game roles (Accountant for mining and wallets, Director for members and blueprints, Station Manager for structures and moons). |
 
 Everything refreshes in the background every 15 minutes (or click **Refresh all**), following ESI's own cache
 timers, so it never hammers CCP's API.
+
+Tables fit the window: long text is shortened with "…" (hover for the full text) instead of scrolling sideways.
+**Right-click any table header to show or hide columns**; the choice is remembered per table.
 
 ## Setup (once, about 5 minutes)
 
