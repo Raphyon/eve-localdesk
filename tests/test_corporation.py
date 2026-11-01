@@ -85,3 +85,50 @@ def test_member_activity(db):
                                        {"character_id": 2, "logon_date": iso(now - 40 * 86400)}], now + 999)
     rows, source = corp_mod.member_activity(db, Syncer(db, FakeESI({})), corp, now)
     assert source == cid and sorted(round(r["days_inactive"]) for r in rows) == [2, 40]
+
+
+def test_corp_wallet_divisions_assets_and_killmails(db):
+    from localdesk.datasets import BY_KEY
+    cid, corp = 90000040, 98000200
+    add_char(db, cid, "Director", scopes=["esi-wallet.read_corporation_wallets.v1", "esi-assets.read_corporation_assets.v1",
+                                          "esi-killmails.read_corporation_killmails.v1", "esi-alliances.read_contacts.v1"])
+    db.cache_put(cid, "info", {"corporation_id": corp}, time.time() + 999)  # no alliance
+    routes = {("GET", f"/corporations/{corp}/wallets/{d}/journal/"): [{"id": d, "amount": d * 10.0}] for d in range(1, 8)}
+    routes.update({
+        ("GET", f"/corporations/{corp}/assets/"): [
+            {"item_id": 1, "type_id": 27, "location_id": 60003760, "location_flag": "OfficeFolder", "quantity": 1},
+            {"item_id": 2, "type_id": 34, "location_id": 1, "location_flag": "CorpSAG3", "quantity": 1000},
+            {"item_id": 3, "type_id": 17366, "location_id": 1, "location_flag": "CorpSAG2", "quantity": 1},
+            {"item_id": 4, "type_id": 35, "location_id": 3, "location_flag": "Unlocked", "quantity": 50},
+            {"item_id": 5, "type_id": 587, "location_id": 1035466617946, "location_flag": "CorpDeliveries", "quantity": 1}],
+        ("GET", f"/corporations/{corp}/killmails/recent/"): [{"killmail_id": 9, "killmail_hash": "h"}],
+        ("GET", "/killmails/9/h/"): {"killmail_time": "2026-10-01T00:00:00Z", "solar_system_id": 30000142,
+                                    "victim": {"character_id": 123, "corporation_id": corp, "ship_type_id": 587},
+                                    "attackers": [{"character_id": 7, "final_blow": True}]},
+    })
+    syncer = Syncer(db, FakeESI(routes))
+    db.cache_put(0, "prices", [{"type_id": 34, "average_price": 4.0}, {"type_id": 35, "average_price": 10.0}],
+                 time.time() + 999)
+    for key in ("corp_journal", "corp_assets", "corp_killmails", "alliance_contacts"):
+        syncer.sync_dataset(cid, BY_KEY[key])
+    journal = syncer.dataset_rows(cid, BY_KEY["corp_journal"])
+    assert sorted((r["division"], r["amount"]) for r in journal) == [(d, d * 10.0) for d in range(1, 8)]
+    assets = {a["item_id"]: a for a in syncer.dataset_rows(cid, BY_KEY["corp_assets"])}
+    assert 1 not in assets                                    # the office container itself is skipped
+    assert assets[2]["root_location"] == 60003760 and assets[2]["hangar"] == 3 and assets[2]["value"] == 4000
+    assert assets[4]["hangar"] == 2 and assets[4]["root_location"] == 60003760  # inside a container in hangar 2
+    assert assets[5]["hangar"] == "CorpDeliveries" and assets[5]["root_location"] == 1035466617946
+    kills = syncer.dataset_rows(cid, BY_KEY["corp_killmails"])
+    assert kills[0]["loss"] is True                           # victim was in our corporation
+    assert syncer.dataset_rows(cid, BY_KEY["alliance_contacts"]) == []  # not in an alliance: nothing fetched
+
+
+def test_division_names(db):
+    cid, corp = 90000041, 98000201
+    add_char(db, cid, "Director")
+    db.cache_put(cid, "info", {"corporation_id": corp}, time.time() + 999)
+    assert corp_mod.division_names(db, corp)["wallet"][1] == "Master Wallet"
+    db.cache_put(cid, "corp_divisions", {"wallet": [{"division": 2, "name": "SRP"}], "hangar": [{"division": 1, "name": "Ammo"}]},
+                 time.time() + 999)
+    names = corp_mod.division_names(db, corp)
+    assert names["wallet"][2] == "SRP" and names["hangar"][1] == "Ammo" and names["wallet"][3] == "Wallet division 3"

@@ -3,7 +3,8 @@ corporation modules). Adding a module = adding a Dataset here; syncing, name res
 Data browser page pick it up automatically.
 
 Column kinds: text, int, float, isk, date, name (any ID resolved via /universe/names), type
-(inventory type ID), location (station/structure/system ID), bool, standing, badge (status pill)."""
+(inventory type ID), location (station/structure/system ID), bool, standing, badge (status pill),
+division (corp wallet/hangar division, shown by its in-game name)."""
 from dataclasses import dataclass, field
 
 
@@ -33,10 +34,11 @@ class Dataset:
     note: str = ""            # shown above the table (e.g. which corp role is needed)
     actions: list = field(default_factory=list)  # [(label, function name in ui.data_browser)]
     extra_ids: object = None  # callable(row) -> more type/name IDs to resolve
+    divisions: bool = False   # corp wallet endpoint with {division}: fetched for divisions 1-7 and combined
 
     @property
     def corp(self):
-        return "{corp}" in self.path
+        return "{corp}" in self.path or "{alliance}" in self.path
 
 
 ACTIVITIES = {1: "Manufacturing", 3: "TE research", 4: "ME research", 5: "Copying", 7: "Reverse engineering",
@@ -177,9 +179,45 @@ DATASETS = [
             "esi-wallet.read_corporation_wallets.v1", [
                 Col("Division", "division", "int"), Col("Balance", "balance", "isk")],
             note="Requires the Accountant or Junior Accountant role."),
-    Dataset("corp_journal", "Master wallet journal", "Corporation", "/corporations/{corp}/wallets/1/journal/",
-            "esi-wallet.read_corporation_wallets.v1", JOURNAL_COLS, paged=True,
-            note="Division 1 (master wallet). Requires the Accountant role."),
+    Dataset("corp_journal", "Wallet journal", "Corporation", "/corporations/{corp}/wallets/{division}/journal/",
+            "esi-wallet.read_corporation_wallets.v1", [Col("Division", "division", "division")] + JOURNAL_COLS,
+            paged=True, divisions=True, note="All seven wallet divisions. Requires the Accountant role."),
+    Dataset("corp_transactions", "Wallet transactions", "Corporation",
+            "/corporations/{corp}/wallets/{division}/transactions/", "esi-wallet.read_corporation_wallets.v1", [
+                Col("Date", "date", "date"), Col("Division", "division", "division"), Col("Item", "type_id", "type"),
+                Col("Qty", "quantity", "int"), Col("Unit price", "unit_price", "isk"), Col("Total", _total, "isk"),
+                Col("Buy/Sell", lambda r: "Buy" if r.get("is_buy") else "Sell", "badge"),
+                Col("Client", "client_id", "name"), Col("Location", "location_id", "location")],
+            divisions=True, note="All seven wallet divisions. Requires the Accountant role."),
+    Dataset("corp_contacts", "Corporation contacts", "Corporation", "/corporations/{corp}/contacts/",
+            "esi-corporations.read_contacts.v1", [
+                Col("Contact", "contact_id", "name"), Col("Type", "contact_type"),
+                Col("Standing", "standing", "standing"), Col("Watched", "is_watched", "bool", optional=True)],
+            paged=True),
+    Dataset("alliance_contacts", "Alliance contacts", "Corporation", "/alliances/{alliance}/contacts/",
+            "esi-alliances.read_contacts.v1", [
+                Col("Contact", "contact_id", "name"), Col("Type", "contact_type"),
+                Col("Standing", "standing", "standing")], paged=True,
+            note="Only when the corporation is in an alliance."),
+    Dataset("corp_standings", "NPC standings", "Corporation", "/corporations/{corp}/standings/",
+            "esi-corporations.read_standings.v1", [
+                Col("From", "from_id", "name"), Col("Type", "from_type"), Col("Standing", "standing", "standing")],
+            paged=True),
+    Dataset("corp_killmails", "Killmails", "Corporation", "/corporations/{corp}/killmails/recent/",
+            "esi-killmails.read_corporation_killmails.v1", [
+                Col("Time", "time", "date"), Col("Kill/Loss", lambda r: "Loss" if r.get("loss") else "Kill", "badge"),
+                Col("Victim", "victim_id", "name"), Col("Victim corp", "victim_corp_id", "name"),
+                Col("Ship", "ship_type_id", "type"), Col("System", "system_id", "name"),
+                Col("Attackers", "attackers", "int"), Col("Final blow", "final_blow_id", "name", optional=True),
+                Col("Est. ship value", "ship_value", "isk")],
+            paged=True, hook="hook_corp_killmails", actions=[("Open on zKillboard", "open_zkill")],
+            note="Requires the Director role."),
+    Dataset("corp_assets", "Assets", "Corporation", "/corporations/{corp}/assets/",
+            "esi-assets.read_corporation_assets.v1", [
+                Col("Item", "type_id", "type"), Col("Qty", "quantity", "int"),
+                Col("Location", "root_location", "location"), Col("Hangar", "hangar", "division"),
+                Col("Est. value", "value", "isk")],
+            paged=True, hook="hook_corp_assets", note="Requires the Director role. Values use CCP's average prices."),
     Dataset("corp_contracts", "Contracts", "Corporation", "/corporations/{corp}/contracts/",
             "esi-contracts.read_corporation_contracts.v1", CONTRACT_COLS, paged=True),
     Dataset("corp_industry", "Industry jobs", "Corporation", "/corporations/{corp}/industry/jobs/",

@@ -25,6 +25,7 @@ S_STRUCTURES = "esi-universe.read_structures.v1"
 S_WAYPOINT = "esi-ui.write_waypoint.v1"
 S_SEARCH_STRUCTURES = "esi-search.search_structures.v1"
 S_CORP_MINING = "esi-industry.read_corporation_mining.v1"
+S_CORP_DIVISIONS = "esi-corporations.read_divisions.v1"
 CORP_MINING_INTERVAL = 3600  # one character per corporation refreshes the ledger at most this often
 
 # Structure names are "<System> - <Name>" and Ansiblex gates "<A> » <B> - <Name>", so these searches
@@ -144,13 +145,30 @@ class Syncer:
         return errors
 
     def sync_dataset(self, cid, ds, force=False):
-        corp = (self.db.cache_get(cid, "info") or {}).get("corporation_id")
+        info = self.db.cache_get(cid, "info") or {}
+        corp, alliance = info.get("corporation_id"), info.get("alliance_id")
         if ds.corp and (not corp or corp < 2_000_000):  # NPC corps have no corp data
             return None
-        path = ds.path.format(cid=cid, corp=corp)
+        if "{alliance}" in ds.path and not alliance:
+            return None
         raw_key = f"{ds.key}:raw" if ds.hook else ds.key
+        marker = self.db.cache_row(cid, raw_key)
+        if marker and isinstance(marker["data"], dict) and marker["data"].get("no_access") \
+                and marker["expires_at"] > time.time() and not force:
+            return None
         try:
-            data = self.fetch(cid, raw_key, path, paged=ds.paged, params=ds.params, force=force)
+            if ds.divisions:
+                data, expires = [], []
+                for division in range(1, 8):
+                    part = self.fetch(cid, f"{raw_key}:{division}", ds.path.format(
+                        cid=cid, corp=corp, alliance=alliance, division=division),
+                        paged=ds.paged, params=ds.params, force=force)
+                    data += [dict(r, division=division) for r in part or []]
+                    expires.append(self.db.cache_row(cid, f"{raw_key}:{division}")["expires_at"])
+                self.db.cache_put(cid, raw_key, data, min(expires))
+            else:
+                data = self.fetch(cid, raw_key, ds.path.format(cid=cid, corp=corp, alliance=alliance),
+                                  paged=ds.paged, params=ds.params, force=force)
         except ESIError as e:
             if ds.corp and e.status in (401, 403):
                 # Missing corp role: remember "no access" for a while instead of hitting ESI's error limit.
@@ -159,7 +177,7 @@ class Syncer:
                     self.db.cache_put(cid, ds.key, {"no_access": True}, time.time() + NO_ACCESS_TTL)
                 return None
             raise
-        if ds.hook and not (isinstance(data, dict) and data.get("no_access")):
+        if ds.hook:
             row = self.db.cache_row(cid, raw_key)
             self.db.cache_put(cid, ds.key, getattr(self, ds.hook)(cid, data), row["expires_at"])
         return data
@@ -185,6 +203,12 @@ class Syncer:
             return
         info = self.fetch(0, f"corp_info:{corp}", f"/corporations/{corp}/", auth=False, force=force, ttl=86400)
         self.resolve([info.get("ceo_id"), info.get("alliance_id"), corp])
+        if self.has_scope(cid, S_CORP_DIVISIONS):
+            try:  # wallet and hangar division names (needs the Director role)
+                self.fetch(cid, "corp_divisions", f"/corporations/{corp}/divisions/", force=force, ttl=86400)
+            except ESIError as e:
+                if e.status not in (401, 403):
+                    raise
         if self.has_scope(cid, S_CORP_MINING):
             self.sync_corp_mining(cid, corp, force)
 
@@ -262,6 +286,13 @@ class Syncer:
         return [dict(r, value=prices.get(r["type_id"], 0.0) * r.get("quantity", 0)) for r in rows]
 
     def hook_killmails(self, cid, recent):
+        return self._killmail_rows(recent, lambda victim: victim.get("character_id") == cid)
+
+    def hook_corp_killmails(self, cid, recent):
+        corp = self.corp_of(cid)
+        return self._killmail_rows(recent, lambda victim: victim.get("corporation_id") == corp)
+
+    def _killmail_rows(self, recent, is_loss):
         """ESI only lists IDs; details are public and never change, so they are cached forever."""
         prices = self.price_map()
         out = []
@@ -275,14 +306,40 @@ class Syncer:
             victim, attackers = d.get("victim", {}), d.get("attackers", [])
             final = next((a for a in attackers if a.get("final_blow")), {})
             out.append({
-                "killmail_id": kid, "time": d.get("killmail_time"),
-                "loss": victim.get("character_id") == cid,
+                "killmail_id": kid, "time": d.get("killmail_time"), "loss": is_loss(victim),
                 "victim_id": victim.get("character_id") or victim.get("corporation_id"),
                 "victim_corp_id": victim.get("corporation_id"), "ship_type_id": victim.get("ship_type_id"),
                 "system_id": d.get("solar_system_id"), "attackers": len(attackers),
                 "final_blow_id": final.get("character_id") or final.get("corporation_id"),
                 "ship_value": prices.get(victim.get("ship_type_id"), 0.0),
             })
+        return out
+
+    def hook_corp_assets(self, cid, assets):
+        """Flatten corp assets: each item with its top-level location (station/structure) and the hangar
+        division it sits in (CorpSAG1-7), skipping the office containers themselves."""
+        prices = self.price_map()
+        by_id = {a["item_id"]: a for a in assets}
+
+        def place(item):
+            hangar, node, seen = item.get("location_flag"), item, set()
+            while node["location_id"] in by_id and node["item_id"] not in seen:
+                seen.add(node["item_id"])
+                parent = by_id[node["location_id"]]
+                if parent.get("location_flag") == "OfficeFolder" or parent.get("type_id") == 27:
+                    hangar = node.get("location_flag")
+                node = parent
+            return node["location_id"], hangar
+
+        out = []
+        for a in assets:
+            if a.get("type_id") == 27 or a.get("location_flag") == "OfficeFolder":  # the office itself
+                continue
+            root, hangar = place(a)
+            unit = 0.0 if a.get("is_blueprint_copy") else prices.get(a["type_id"], 0.0)
+            division = int(hangar[-1]) if hangar and hangar.startswith("CorpSAG") and hangar[-1].isdigit() else hangar
+            out.append({"item_id": a["item_id"], "type_id": a["type_id"], "quantity": a.get("quantity", 1),
+                        "root_location": root, "hangar": division, "value": unit * a.get("quantity", 1)})
         return out
 
     def hook_planets(self, cid, colonies):

@@ -1,20 +1,22 @@
-"""Generic table browser for every module defined in datasets.py."""
+"""Generic tables for the modules defined in datasets.py: the Data browser (character modules) and the
+Corporation page's modules both use DatasetView."""
 import time
 import webbrowser
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QSplitter, QTreeWidget,
-                               QTreeWidgetItem)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QSplitter,
+                               QTreeWidget, QTreeWidgetItem)
 
+from .. import corporation as corp_mod
 from ..datasets import BY_KEY, DATASETS
-from ..model import fmt_time, fmt_time_short, parse_time
+from ..model import fmt_isk, fmt_time, fmt_time_short, parse_time
 from .widgets import (USER_ROLE, Card, Page, SortItem, button, fill_table, isk_color, make_table, muted,
                       standing_color, status_color)
 
 MAX_ROWS = 10000
 SLOT_ORDER = ["LoSlot", "MedSlot", "HiSlot", "RigSlot", "SubSystemSlot", "ServiceSlot"]
 DEADLINE_WORDS = ("expire", "ends", "arrives", "fracture")
+TOTAL_COLUMNS = ("Amount", "Total", "Est. value")
 
 
 def to_eft(view, fit):
@@ -34,157 +36,157 @@ def to_eft(view, fit):
     return "\n".join(lines).rstrip() + "\n"
 
 
-class DataBrowserPage(Page):
-    title = "Data browser"
-    icon = "fa5s.table"
-    section = "Character"
+class DatasetView(Card):
+    """One dataset as a filterable, sortable table in a card. mode="characters" shows your characters'
+    rows (optionally all of them); mode="corp" shows a corporation's rows, read through whichever of your
+    characters in that corporation has access."""
 
-    def __init__(self, ctx):
-        super().__init__(ctx)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(14)
-        modules = Card("Modules", margins=0)
-        modules.setMinimumWidth(170)
-        self.nav = QTreeWidget()
-        self.nav.setHeaderHidden(True)
-        self.nav.setIndentation(14)
-        self.nav.setStyleSheet("QTreeView::item { padding: 5px 2px; }")
-        groups = {}
-        for ds in DATASETS:
-            if ds.group not in groups:
-                groups[ds.group] = QTreeWidgetItem([ds.group.upper()])
-                f = groups[ds.group].font(0)
-                f.setBold(True)
-                f.setPointSizeF(f.pointSizeF() * 0.85)
-                groups[ds.group].setFont(0, f)
-                groups[ds.group].setForeground(0, QColor("#6c757d"))
-                groups[ds.group].setFlags(Qt.ItemFlag.ItemIsEnabled)
-                self.nav.addTopLevelItem(groups[ds.group])
-            item = QTreeWidgetItem([ds.title])
-            item.setData(0, USER_ROLE, ds.key)
-            groups[ds.group].addChild(item)
-        self.nav.expandAll()
-        self.nav.currentItemChanged.connect(lambda *_: self.refresh_view())
-        modules.add(self.nav, 1)
-        split = QSplitter()
-        split.setChildrenCollapsible(False)
-        split.setHandleWidth(10)
-        split.addWidget(modules)
-        lay.addWidget(split)
-
-        self.card = Card("—", accent="primary", margins=0)
+    def __init__(self, ctx, mode="characters"):
+        super().__init__("—", accent="primary", margins=0)
+        self.ctx, self.mode = ctx, mode
+        self.ds, self.corp = None, None
         self.count = muted(wrap=False)
         self.all_chars = QCheckBox("All characters")
         self.all_chars.setChecked(True)
-        self.all_chars.toggled.connect(self.refresh_view)
+        self.all_chars.toggled.connect(self.refresh)
+        self.all_chars.setVisible(mode == "characters")
+        self.division = QComboBox()
+        self.division.currentIndexChanged.connect(lambda _: self.refresh())
         self.search = QLineEdit()
         self.search.setPlaceholderText("Filter rows…")
         self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(240)
+        self.search.setMinimumWidth(220)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(250)
-        self._debounce.timeout.connect(self.refresh_view)
+        self._debounce.timeout.connect(self.refresh)
         self.search.textChanged.connect(lambda _: self._debounce.start())
         self.action_bar = QHBoxLayout()
-        self.card.add_tool(self.count)
-        self.card.tools.addLayout(self.action_bar)
-        self.card.add_tool(self.all_chars)
-        self.card.add_tool(self.search)
+        self.add_tool(self.count)
+        self.tools.addLayout(self.action_bar)
+        self.add_tool(self.all_chars)
+        self.add_tool(self.division)
+        self.add_tool(self.search)
         self.note = QLabel()
         self.note.setObjectName("note")
         self.note.setWordWrap(True)
-        self.card.body.setSpacing(0)
-        self.card.add(self.note)
+        self.body.setSpacing(0)
+        self.add(self.note)
         self.table = make_table(["—"])
-        self.card.add(self.table, 1)
-        split.addWidget(self.card)
-        split.setStretchFactor(1, 1)
-        split.setSizes([205, 1000])
-        self._rows = []
-        self._action_buttons = []
-        self.nav.setCurrentItem(groups["Character"].child(0))
+        self.add(self.table, 1)
+        self._rows, self._action_buttons, self._division_key = [], [], None
 
-    def dataset(self):
-        item = self.nav.currentItem()
-        key = item.data(0, USER_ROLE) if item else None
-        return BY_KEY.get(key)
+    def set_dataset(self, ds, corp=None):
+        changed = ds is not self.ds or corp != self.corp
+        self.ds, self.corp = ds, corp
+        if changed:
+            self._fill_divisions()
+        self.refresh()
 
-    def show_dataset(self, key):
-        for i in range(self.nav.topLevelItemCount()):
-            group = self.nav.topLevelItem(i)
-            for j in range(group.childCount()):
-                if group.child(j).data(0, USER_ROLE) == key:
-                    self.nav.setCurrentItem(group.child(j))
+    # --- data -------------------------------------------------------------
+    def _division_col(self):
+        return next((c for c in self.ds.cols if c.kind == "division"), None) if self.ds else None
 
-    def refresh_view(self):
-        ds = self.dataset()
-        if ds is None:
-            return
-        self._set_actions(ds)
+    def _division_kind(self):
+        col = self._division_col()
+        return "hangar" if col is not None and col.get == "hangar" else "wallet"
+
+    def _fill_divisions(self):
+        col = self._division_col()
+        self.division.blockSignals(True)
+        self.division.clear()
+        if col is not None:
+            names = corp_mod.division_names(self.ctx.db, self.corp)[self._division_kind()] if self.corp else {}
+            self.division.addItem("All divisions", None)
+            for d in range(1, 8):
+                self.division.addItem(names.get(d, f"Division {d}"), d)
+        self.division.setVisible(col is not None)
+        self.division.blockSignals(False)
+
+    def _gather(self):
+        """([(character id, row)], [names of characters without access])"""
+        ds, db, syncer = self.ds, self.ctx.db, self.ctx.syncer
         chars = self.ctx.characters()
+        names = {c["character_id"]: c["name"] for c in chars}
+        if self.mode == "corp":
+            rows, cid = corp_mod.first_with_access(db, syncer, self.corp, ds.key)
+            if rows is None:
+                return [], [names.get(c, str(c)) for c in corp_mod.my_corporations(db).get(self.corp, [])]
+            return [(cid, r) for r in rows], []
         cids = [c["character_id"] for c in chars] if self.all_chars.isChecked() else \
             ([self.ctx.current_char] if self.ctx.current_char else [])
-        owner_names = {c["character_id"]: c["name"] for c in chars}
-        syncer, view = self.ctx.syncer, self.ctx.view
-
-        rows, no_access, seen_corps = [], [], set()
+        rows, no_access = [], []
         for cid in cids:
             data = syncer.dataset_rows(cid, ds)
             if data is None:
-                no_access.append(owner_names.get(cid, str(cid)))
-                continue
-            if ds.corp:
-                corp = (view.get(cid, "info") or {}).get("corporation_id")
-                if corp in seen_corps:
-                    continue
-                if data:
-                    seen_corps.add(corp)
-            rows += [(cid, r) for r in data]
+                no_access.append(names.get(cid, str(cid)))
+            else:
+                rows += [(cid, r) for r in data]
+        return rows, no_access
 
-        ids = {col.value(r) for col in ds.cols if col.kind in ("name", "type", "location") for _, r in rows}
+    def refresh(self):
+        ds = self.ds
+        if ds is None:
+            return
+        self._set_actions(ds)
+        view = self.ctx.view
+        rows, no_access = self._gather()
+        division = self.division.currentData() if self.division.isVisible() else None
+        col = self._division_col()
+        if division is not None and col is not None:
+            rows = [(c, r) for c, r in rows if col.value(r) == division]
+        self._division_names = (corp_mod.division_names(self.ctx.db, self.corp)[self._division_kind()]
+                                if self.corp else {})
+        ids = {c.value(r) for c in ds.cols if c.kind in ("name", "type", "location") for _, r in rows}
         names = view.names({i for i in ids if isinstance(i, int)})
+        owner_names = {c["character_id"]: c["name"] for c in self.ctx.characters()}
         query = self.search.text().strip().lower()
-        owner_header = "Corporation" if ds.corp else "Character"
-        headers = [owner_header] + [c.header for c in ds.cols]
+        with_owner = self.mode == "characters"
+        headers = (["Character"] if with_owner else []) + [c.header for c in ds.cols]
         table_rows, self._rows = [], []
+        totals = {c.header: 0.0 for c in ds.cols if c.kind == "isk" and c.header in TOTAL_COLUMNS}
         now = time.time()
         for cid, r in rows:
-            if ds.corp:
-                corp = (view.get(cid, "info") or {}).get("corporation_id")
-                owner = view.name(corp)
-            else:
-                owner = owner_names.get(cid, "")
-            cells = [SortItem(owner, data=len(self._rows))]
-            for col in ds.cols:
-                cells.append(self._cell(col, col.value(r), names, now))
-            if query and not any(query in c.text().lower() for c in cells):
+            cells = [SortItem(owner_names.get(cid, ""), data=len(self._rows))] if with_owner else []
+            for c in ds.cols:
+                cells.append(self._cell(c, c.value(r), names, now))
+            if not with_owner:
+                cells[0].setData(USER_ROLE, len(self._rows))
+            if query and not any(query in cell.text().lower() for cell in cells):
                 continue
+            for header in totals:
+                value = next(c.value(r) for c in ds.cols if c.header == header)
+                totals[header] += value or 0
             self._rows.append((cid, r))
             table_rows.append(cells)
             if len(table_rows) >= MAX_ROWS:
                 break
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
-        self.table.set_headers(headers, prefs_key=f"data:{ds.key}",
+        self.table.set_headers(headers, prefs_key=f"{self.mode}:{ds.key}",
                                optional=[c.header for c in ds.cols if c.optional])
         self.table.setSortingEnabled(True)
         fill_table(self.table, table_rows)
-        date_col = next((i for i, c in enumerate(ds.cols, 1) if c.kind == "date"), None)
+        date_col = next((i for i, c in enumerate(ds.cols, int(with_owner)) if c.kind == "date"), None)
         if date_col is not None:
             self.table.sortItems(date_col, Qt.SortOrder.DescendingOrder)
 
-        self.card.set_title(ds.title if ds.group == "Character" else f"Corporation · {ds.title}")
+        self.set_title(ds.title)
         notes = [ds.note] if ds.note else []
-        if any(c.optional for c in ds.cols):
-            notes.append("Right-click a column header to show or hide columns.")
         if no_access:
             reason = "missing corp role or scope" if ds.corp else f"scope {ds.scope} not granted"
-            notes.append(f"No access for: {', '.join(no_access)} ({reason}).")
+            who = ", ".join(no_access) if no_access else "none of your characters"
+            notes.append(f"No access for: {who} ({reason}).")
+        elif self.mode == "corp" and not corp_mod.my_corporations(self.ctx.db).get(self.corp):
+            notes.append("None of your characters is in this corporation.")
+        if any(c.optional for c in ds.cols):
+            notes.append("Right-click a column header to show or hide columns.")
         self.note.setText(" ".join(notes))
         self.note.setVisible(bool(notes))
-        self.count.setText(f"{len(table_rows):,} rows" + (" (capped)" if len(table_rows) >= MAX_ROWS else ""))
+        summary = f"{len(table_rows):,} rows" + (" (capped)" if len(table_rows) >= MAX_ROWS else "")
+        for header, total in totals.items():
+            summary += f" · {header.lower()} {fmt_isk(total)}"
+        self.count.setText(summary)
 
     def _cell(self, col, raw, names, now):
         kind = col.kind
@@ -198,7 +200,7 @@ class DataBrowserPage(Page):
             return SortItem(fmt_time_short(ts), ts, color=color, tip=fmt_time(ts))
         if kind == "isk":
             color = isk_color(raw) if col.header in ("Amount", "Total") else None
-            return SortItem(f"{raw:,.2f}", raw, right=True, color=color)
+            return SortItem(fmt_isk(raw), raw, right=True, color=color, tip=f"{raw:,.2f} ISK")
         if kind == "int":
             return SortItem(f"{raw:,}", raw, right=True)
         if kind == "float":
@@ -210,6 +212,9 @@ class DataBrowserPage(Page):
         if kind == "badge":
             text = str(raw).replace("_", " ")
             return SortItem(text, text, badge=status_color(raw) or "#6c757d")
+        if kind == "division":
+            return SortItem(self._division_names.get(raw, str(raw)) if isinstance(raw, int) else str(raw),
+                            raw if isinstance(raw, int) else 99)
         if kind == "location":
             return SortItem(names.get(raw) or self.ctx.view.location_name(raw))
         if kind in ("name", "type"):
@@ -218,6 +223,9 @@ class DataBrowserPage(Page):
 
     # --- per-dataset actions ----------------------------------------------
     def _set_actions(self, ds):
+        if getattr(self, "_actions_for", None) is ds:
+            return
+        self._actions_for = ds
         for b in self._action_buttons:
             b.deleteLater()
         self._action_buttons = []
@@ -244,3 +252,57 @@ class DataBrowserPage(Page):
         km = self._selected_row()
         if km:
             webbrowser.open(f"https://zkillboard.com/kill/{km['killmail_id']}/")
+
+
+class DataBrowserPage(Page):
+    title = "Data browser"
+    icon = "fa5s.table"
+    section = "Character"
+
+    def __init__(self, ctx):
+        super().__init__(ctx)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(14)
+        modules = Card("Modules", margins=0)
+        modules.setMinimumWidth(170)
+        self.nav = QTreeWidget()
+        self.nav.setHeaderHidden(True)
+        self.nav.setIndentation(14)
+        self.nav.setRootIsDecorated(False)
+        self.nav.setStyleSheet("QTreeView::item { padding: 5px 2px; }")
+        first = None
+        for ds in DATASETS:
+            if ds.group != "Character":  # corporation modules live on the Corporation page
+                continue
+            item = QTreeWidgetItem([ds.title])
+            item.setData(0, USER_ROLE, ds.key)
+            self.nav.addTopLevelItem(item)
+            first = first or item
+        self.nav.currentItemChanged.connect(lambda *_: self.refresh_view())
+        modules.add(self.nav, 1)
+        split = QSplitter()
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(10)
+        split.addWidget(modules)
+        self.view = DatasetView(ctx, "characters")
+        split.addWidget(self.view)
+        split.setStretchFactor(1, 1)
+        split.setSizes([205, 1000])
+        lay.addWidget(split)
+        self.table = self.view.table
+        self.nav.setCurrentItem(first)
+
+    def dataset(self):
+        item = self.nav.currentItem()
+        return BY_KEY.get(item.data(0, USER_ROLE)) if item else None
+
+    def show_dataset(self, key):
+        for i in range(self.nav.topLevelItemCount()):
+            if self.nav.topLevelItem(i).data(0, USER_ROLE) == key:
+                self.nav.setCurrentItem(self.nav.topLevelItem(i))
+
+    def refresh_view(self):
+        ds = self.dataset()
+        if ds is not None:
+            self.view.set_dataset(ds)

@@ -3,15 +3,32 @@ and member activity."""
 import time
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSplitter,
-                               QTabWidget, QVBoxLayout, QWidget)
+                               QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import corporation as corp_mod
+from ..datasets import BY_KEY
 from ..model import fmt_duration, fmt_isk, fmt_time, fmt_time_short, parse_time
 from .theme import ACCENT
+from .data_browser import DatasetView
 from .widgets import (Card, InfoBox, Page, SortItem, button, fill_table, make_table, muted)
 
 FUEL_WARNING = 7 * 86400
+# (group, [(title, panel key or dataset key)])
+MODULES = [
+    ("Overview", [("Summary", "summary")]),
+    ("Finance", [("Wallets", "wallets"), ("Wallet journal", "corp_journal"),
+                 ("Wallet transactions", "corp_transactions"), ("Market orders", "corp_orders"),
+                 ("Contracts", "corp_contracts")]),
+    ("Industry", [("Mining ledger", "mining"), ("Industry jobs", "corp_industry"), ("Blueprints", "corp_blueprints"),
+                  ("Moon extractions", "corp_extractions")]),
+    ("Relations", [("Killmails", "corp_killmails"), ("Corporation contacts", "corp_contacts"),
+                   ("Alliance contacts", "alliance_contacts"), ("NPC standings", "corp_standings")]),
+    ("Assets", [("Assets", "corp_assets"), ("Structures & fuel", "corp_structures"),
+                ("Customs offices", "corp_customs")]),
+    ("People", [("Members", "members"), ("Member tracking", "corp_members")]),
+]
 GROUP_HEADERS = {
     "character": ["Character", "Corporation", "Quantity", "Est. value", "Tax owed", "Share"],
     "ore": ["Ore", "Quantity", "Est. value", "Miners", "Share"],
@@ -44,6 +61,62 @@ class CorporationPage(Page):
         bar.addWidget(self.info, 1)
         lay.addLayout(bar)
 
+        split = QSplitter()
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(10)
+        modules = Card("Modules", margins=0)
+        modules.setMinimumWidth(180)
+        self.nav = QTreeWidget()
+        self.nav.setHeaderHidden(True)
+        self.nav.setIndentation(14)
+        self.nav.setStyleSheet("QTreeView::item { padding: 5px 2px; }")
+        first = None
+        for group, entries in MODULES:
+            header = QTreeWidgetItem([group.upper()])
+            f = header.font(0)
+            f.setBold(True)
+            f.setPointSizeF(f.pointSizeF() * 0.85)
+            header.setFont(0, f)
+            header.setForeground(0, QColor("#6c757d"))
+            header.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.nav.addTopLevelItem(header)
+            for title, key in entries:
+                item = QTreeWidgetItem([title])
+                item.setData(0, Qt.ItemDataRole.UserRole, key)
+                header.addChild(item)
+                first = first or item
+        self.nav.expandAll()
+        self.nav.currentItemChanged.connect(lambda *_: self._show_module())
+        modules.add(self.nav, 1)
+        split.addWidget(modules)
+
+        self.stack = QStackedWidget()
+        self.panels = {"summary": self._summary_panel(), "wallets": self._wallets_panel(),
+                       "mining": self._wrap_card("Mining ledger", self._mining_tab()),
+                       "members": self._wrap_card("Members", self._members_tab())}
+        self.dataset_view = DatasetView(ctx, "corp")
+        self.panels["dataset"] = self.dataset_view
+        for panel in self.panels.values():
+            self.stack.addWidget(panel)
+        split.addWidget(self.stack)
+        split.setStretchFactor(1, 1)
+        split.setSizes([210, 1000])
+        lay.addWidget(split, 1)
+        self.empty = muted("None of your characters is in a player corporation yet.")
+        lay.addWidget(self.empty)
+        self.nav.setCurrentItem(first)
+
+    @staticmethod
+    def _wrap_card(title, widget):
+        card = Card(title, accent="primary", margins=0)
+        card.add(widget, 1)
+        return card
+
+    def _summary_panel(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(14)
         boxes = QHBoxLayout()
         boxes.setSpacing(14)
         self.box_members = InfoBox("fa5s.users", ACCENT["info"], "Members")
@@ -52,18 +125,30 @@ class CorporationPage(Page):
         self.box_mined = InfoBox("fa5s.gem", ACCENT["purple"], "Mined this month (ISK)")
         for b in (self.box_members, self.box_wallet, self.box_structures, self.box_mined):
             boxes.addWidget(b)
-        lay.addLayout(boxes)
+        v.addLayout(boxes)
+        v.addWidget(self._wrap_card("At a glance", self._overview_tab()), 1)
+        return w
 
-        card = Card(margins=0)
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.addTab(self._overview_tab(), "Overview")
-        self.tabs.addTab(self._mining_tab(), "Mining ledger")
-        self.tabs.addTab(self._members_tab(), "Members")
-        card.add(self.tabs, 1)
-        lay.addWidget(card, 1)
-        self.empty = muted("None of your characters is in a player corporation yet.")
-        lay.addWidget(self.empty)
+    def _wallets_panel(self):
+        card = Card("Wallets", accent="primary", margins=0)
+        self.wallets_total = muted(wrap=False)
+        card.add_tool(self.wallets_total)
+        self.wallets = make_table(["Division", "Balance", "Share"], stretch=0, prefs_key="corp_wallets")
+        card.add(self.wallets, 1)
+        card.add(muted("Open Wallet journal or Wallet transactions for the entries of each division. "
+                       "Balances need the Accountant role; division names need a Director."))
+        return card
+
+    def _show_module(self):
+        item = self.nav.currentItem()
+        key = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        if not key:
+            return
+        if key in self.panels:
+            self.stack.setCurrentWidget(self.panels[key])
+        else:
+            self.stack.setCurrentWidget(self.dataset_view)
+            self.dataset_view.set_dataset(BY_KEY[key], self.current_corp())
 
     # --- tabs ---------------------------------------------------------------
     def _overview_tab(self):
@@ -153,7 +238,7 @@ class CorporationPage(Page):
         self.corp.blockSignals(False)
         has = bool(corps)
         self.empty.setVisible(not has)
-        self.tabs.setEnabled(has)
+        self.stack.setEnabled(has)
         corp = self.current_corp()
         if not corp:
             return
@@ -165,6 +250,9 @@ class CorporationPage(Page):
         self.m_tax.blockSignals(False)
         self._fill_mining()
         self._fill_members(corp)
+        self._fill_wallets(corp)
+        if self.stack.currentWidget() is self.dataset_view:
+            self._show_module()
 
     def _fill_info(self, corp):
         v, db = self.ctx.view, self.ctx.db
@@ -227,6 +315,19 @@ class CorporationPage(Page):
         self.chunks.sortItems(1, Qt.SortOrder.AscendingOrder)
         month = corp_mod.summarize(corp_mod.mining_entries(db, corp, "this_month"), syncer.price_map(), "ore")
         self.box_mined.set(fmt_isk(sum(r["value"] for r in month)) if month else "—")
+
+    def _fill_wallets(self, corp):
+        wallets, _ = corp_mod.first_with_access(self.ctx.db, self.ctx.syncer, corp, "corp_wallets")
+        names = corp_mod.division_names(self.ctx.db, corp)["wallet"]
+        total = sum(w.get("balance", 0) for w in wallets or []) or 1
+        fill_table(self.wallets, [[SortItem(names.get(w["division"], f"Division {w['division']}"), w["division"]),
+                                   SortItem(fmt_isk(w.get("balance", 0)), w.get("balance", 0), right=True,
+                                            tip=f"{w.get('balance', 0):,.2f} ISK"),
+                                   SortItem(f"{w.get('balance', 0) / total * 100:.1f}%", w.get("balance", 0), right=True)]
+                                  for w in wallets or []])
+        self.wallets.sortItems(0, Qt.SortOrder.AscendingOrder)
+        self.wallets_total.setText(f"total {fmt_isk(sum(w.get('balance', 0) for w in wallets))} ISK" if wallets
+                                   else "no access")
 
     def _fill_structure_filter(self, corp):
         keep = self.m_structure.currentData()

@@ -18,10 +18,13 @@ light/dark toggle (moon icon, top right).
 | **Contacts** | View contacts; **sync contacts between characters** (add missing / also update standings / mirror exactly), with a preview of every change before applying |
 | **Client settings** *(not in SeAT)* | **Copy overview + window layout** (core_char) between characters, and account-wide settings (core_user) between accounts. Automatic backups and one-click restore |
 | **Data browser** | Sortable, filterable tables (one character or all of them) for: wallet transactions, market orders and history, contracts, industry jobs, blueprints, mining ledger with value, killmails (with zKillboard links), planetary industry with extractor expiry, NPC standings, loyalty points, research agents, notifications, saved fittings (**copy as EFT**), calendar, medals, jump fatigue, employment history |
-| **Corporation** | A page per corporation you're in: **overview** (ticker, CEO, tax, members, combined wallets, structures with fuel left, upcoming moon chunks), **mining ledger** (moon mining per character, ore, structure or day, with estimated value and a **mining tax** calculator, copy as CSV; history is kept locally beyond ESI's 30 days), **member activity** (active in 7/30 days, inactive). The Data browser adds structures, members, wallets and journal, contracts, industry jobs, market orders, blueprints, customs offices and moon extractions. Needs characters with the matching in-game roles (Accountant for mining and wallets, Director for members and blueprints, Station Manager for structures and moons). |
+| **Corporation** | A full corp tool for every corporation you're in, with its own module list. **Overview:** ticker, CEO, tax, members, combined wallets, structures with fuel left, moon chunks. **Finance:** all 7 wallet divisions by their in-game names, plus the **journal and transactions of every division** (filter by division), market orders, contracts. **Industry:** mining ledger (per character, ore, structure or day, with estimated value, a mining tax calculator and CSV export, kept locally beyond ESI's 30 days), industry jobs, blueprints, moon extractions. **Relations:** killmails (kills and losses, zKillboard links), corporation and alliance contacts with standings, NPC standings. **Assets:** corp assets by location and hangar division with estimated value, structures and fuel, customs offices. **People:** member activity and member tracking. Each module uses whichever of your characters in that corp has the needed in-game role (see below). |
 
 Everything refreshes in the background every 15 minutes (or click **Refresh all**), following ESI's own cache
 timers, so it never hammers CCP's API.
+
+The app checks GitHub for a newer release once each time it starts (never in the background after that), and
+shows a banner with a download button when there is one. Turn it off in Setup.
 
 Tables fit the window: long text is shortened with "…" (hover for the full text) instead of scrolling sideways.
 **Right-click any table header to show or hide columns**; the choice is remembered per table.
@@ -90,6 +93,20 @@ also shows each jump's timer and the fatigue after it. It starts
 from the pilot's current fatigue (from ESI), assumes you jump as soon as each timer ends, applies the Black Ops
 (-75%) and Jump Freighter/Rorqual (-90%) reductions, and caps fatigue at 5 hours.
 In-game autopilot can't use jump bridges, so "Set waypoints" adds a waypoint at each bridge's entry system.
+
+## Corporation roles
+
+Corporation data comes through your own characters, so what you see depends on their in-game roles:
+
+| Needs | Modules |
+|---|---|
+| any member | corporation info, corporation and alliance contacts, NPC standings |
+| Accountant (or Junior Accountant) | wallets, wallet journal and transactions, mining ledger, market orders |
+| Director | member tracking, blueprints, assets, killmails, division names |
+| Station Manager | structures and fuel, moon extractions |
+| Factory Manager | industry jobs |
+
+A module your characters can't read says so instead of showing an error, and is retried every few hours.
 
 ## Copying overview & UI layouts between characters
 

@@ -107,3 +107,19 @@ def first_with_access(db, syncer, corp, dataset_key):
         if rows is not None:
             return rows, cid
     return None, None
+
+
+def division_names(db, corp):
+    """{"wallet": {1: name, ...}, "hangar": {...}} from the corp's division settings (needs a Director),
+    falling back to EVE's defaults."""
+    names = {"wallet": {1: "Master Wallet", **{d: f"Wallet division {d}" for d in range(2, 8)}},
+             "hangar": {d: f"Hangar {d}" for d in range(1, 8)}}
+    for cid in my_corporations(db).get(corp, []):
+        data = db.cache_get(cid, "corp_divisions")
+        if isinstance(data, dict) and (data.get("wallet") or data.get("hangar")):
+            for kind in ("wallet", "hangar"):
+                for d in data.get(kind, []):
+                    if d.get("name"):
+                        names[kind][d["division"]] = d["name"]
+            break
+    return names

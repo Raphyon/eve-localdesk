@@ -42,6 +42,9 @@ class SetupDialog(QDialog):
         form.addRow("Client ID", self.client_id)
         form.addRow("Callback port", self.port)
         form.addRow("", self.in_app)
+        self.updates = QCheckBox("Check for a new version when the app starts")
+        self.updates.setChecked(ctx.db.get_setting("check_updates", "1") == "1")
+        form.addRow("", self.updates)
         lay.addLayout(form)
         file_note = QLabel(f"Alternatively, put the Client ID in <code>{credentials.FILE_NAME}</code> next to the "
                            f"app or in its data folder; that file overrides this setting.")
@@ -67,4 +70,5 @@ class SetupDialog(QDialog):
         self.ctx.db.set_setting("client_id", self.client_id.text().strip())
         self.ctx.db.set_setting("callback_port", str(self.port.value()))
         self.ctx.db.set_setting("login_mode", "app" if self.in_app.isChecked() else "browser")
+        self.ctx.db.set_setting("check_updates", "1" if self.updates.isChecked() else "0")
         self.accept()

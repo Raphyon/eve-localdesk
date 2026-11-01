@@ -5,8 +5,8 @@ import threading
 import time
 import traceback
 
-from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
                                QMainWindow, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -102,6 +102,9 @@ class MainWindow(QMainWindow):
         content.setObjectName("content")
         cl = QVBoxLayout(content)
         cl.setContentsMargins(16, 16, 16, 16)
+        cl.setSpacing(12)
+        self.update_banner = self._build_update_banner()
+        cl.addWidget(self.update_banner)
         self.stack = QStackedWidget()
         cl.addWidget(self.stack)
         rl.addWidget(content, 1)
@@ -229,6 +232,58 @@ class MainWindow(QMainWindow):
             hl.addWidget(w)
         return header
 
+    def _build_update_banner(self):
+        banner = QFrame()
+        banner.setObjectName("card")
+        banner.setProperty("accent", "info")
+        bl = QHBoxLayout(banner)
+        bl.setContentsMargins(14, 8, 10, 8)
+        self.update_text = QLabel()
+        self.update_text.setWordWrap(True)
+        self.update_download = button("Download", "fa5s.download", "primary")
+        self.update_notes = button("What's new", "fa5s.list-ul")
+        skip = button("Skip this version", kind="flat")
+        close = button("", "fa5s.times", "flat", "Hide until the next start")
+        close.clicked.connect(lambda: banner.setVisible(False))
+        skip.clicked.connect(self._skip_update)
+        bl.addWidget(self.update_text, 1)
+        for b in (self.update_download, self.update_notes, skip, close):
+            bl.addWidget(b)
+        banner.setVisible(False)
+        self._update = None
+        return banner
+
+    def check_for_updates(self):
+        """Runs once per start (never on a timer)."""
+        from .. import updates
+        if self.ctx.db.get_setting("check_updates", "1") != "1":
+            return
+
+        def done(info):
+            if not info or info["version"] == self.ctx.db.get_setting("skipped_version"):
+                return
+            self._update = info
+            self.update_text.setText(f"<b>EVE LocalDesk {info['version']}</b> is available. You have {__version__}.")
+            for b in (self.update_download, self.update_notes):
+                try:
+                    b.clicked.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+            self.update_download.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl(info["download"] or info["page"])))
+            self.update_notes.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(info["page"])))
+            self.update_download.setToolTip("Download the new installer" if info["download"]
+                                            else "Open the release page")
+            self.update_banner.setVisible(True)
+            self.log(f"Update available: {info['version']} ({info['page']})")
+
+        self.run_task(lambda p: updates.check(self.ctx.esi.http, __version__), done, lambda e: None)
+
+    def _skip_update(self):
+        if self._update:
+            self.ctx.db.set_setting("skipped_version", self._update["version"])
+        self.update_banner.setVisible(False)
+
     def _nav_changed(self, item, _previous=None):
         title = item.data(Qt.ItemDataRole.UserRole) if item else None
         if title not in self.pages:
@@ -327,6 +382,7 @@ class MainWindow(QMainWindow):
         if not credentials.client_id(self.ctx.db):
             self.open_setup()
         self.load_universe()
+        self.check_for_updates()
         self.data_changed.emit()
         self.sync_all()
         self.timer.start()

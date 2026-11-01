@@ -37,6 +37,7 @@ SCOPES = [
     "esi-universe.read_structures.v1",
     "esi-ui.write_waypoint.v1",
     "esi-search.search_structures.v1",
+    "esi-corporations.read_divisions.v1",
 ]
 # plus everything the data browser modules need (contracts, industry, killmails, corp data, ...)
 from .datasets import SCOPES as _DATASET_SCOPES  # noqa: E402
