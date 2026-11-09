@@ -37,11 +37,12 @@ class System:
 
 
 class Universe:
-    def __init__(self, systems, regions, gates, stations):
+    def __init__(self, systems, regions, gates, stations, station_systems=None):
         self.systems = systems      # {system_id: System}
         self.regions = regions      # {region_id: name}
         self.gates = gates          # {system_id: set(neighbour ids)}
         self.stations = stations    # {system_id: [station names]}
+        self.station_systems = station_systems or {}  # {station_id: system_id}
         self.by_name = {s.name.lower(): s.id for s in systems.values()}
         self.region_by_name = {name.lower(): rid for rid, name in regions.items()}
         self._grid = {}
@@ -202,6 +203,20 @@ class Universe:
                 break
         return chosen
 
+    def jump_distances(self, origin, bridges=()):
+        """{system_id: gate jumps from origin} for every reachable system (jump bridges count as one jump)."""
+        bmap = self.bridge_map(bridges)
+        dist, frontier = {origin: 0}, [origin]
+        while frontier:
+            nxt = []
+            for cur in frontier:
+                for n in self.gates.get(cur, set()) | bmap.get(cur, set()):
+                    if n not in dist:
+                        dist[n] = dist[cur] + 1
+                        nxt.append(n)
+            frontier = nxt
+        return dist
+
     def describe(self, path):
         """[(system_id, how_reached)] where how_reached is 'start', 'gate' or 'bridge'."""
         out = [(path[0], "start")]
@@ -264,7 +279,8 @@ class Universe:
                             for s in self.systems.values()],
                 "regions": {str(k): v for k, v in self.regions.items()},
                 "gates": pairs,
-                "stations": {str(k): v for k, v in self.stations.items()}}
+                "stations": {str(k): v for k, v in self.stations.items()},
+                "station_systems": {str(k): v for k, v in self.station_systems.items()}}
 
     @classmethod
     def from_json(cls, data):
@@ -274,7 +290,8 @@ class Universe:
             gates.setdefault(a, set()).add(b)
             gates.setdefault(b, set()).add(a)
         return cls(systems, {int(k): v for k, v in data["regions"].items()}, gates,
-                   {int(k): v for k, v in data["stations"].items()})
+                   {int(k): v for k, v in data["stations"].items()},
+                   {int(k): v for k, v in data.get("station_systems", {}).items()})
 
     # --- building the data --------------------------------------------------
     @classmethod
@@ -295,12 +312,14 @@ class Universe:
                 gates.setdefault(a, set()).add(b)
                 gates.setdefault(b, set()).add(a)
         regions = {int(r["regionID"]): r["regionName"] for r in rows(regions_csv)}
-        stations = {}
+        stations, station_systems = {}, {}
         for r in rows(stations_csv):
             sid = int(r["solarSystemID"])
             if sid in systems:
                 stations.setdefault(sid, []).append(r["stationName"])
-        return cls(systems, regions, gates, stations)
+                if r.get("stationID"):
+                    station_systems[int(r["stationID"])] = sid
+        return cls(systems, regions, gates, stations, station_systems)
 
     @classmethod
     def from_fuzzwork(cls, http, progress=None):
@@ -354,7 +373,7 @@ class Universe:
                                                             json=[c[0] for c in chunk]).json()}
             for st, sid in chunk:
                 stations.setdefault(sid, []).append(names.get(st, f"Station #{st}"))
-        return cls(systems, regions, gates, stations)
+        return cls(systems, regions, gates, stations, {st: sid for st, sid in station_ids})
 
 
 def save(universe, path):

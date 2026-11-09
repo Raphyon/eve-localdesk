@@ -1,9 +1,9 @@
 """Dashboard, character sheet, assets and the activity log."""
 import time
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QStringListModel, Qt, QTimer
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
+from PySide6.QtWidgets import (QCheckBox, QCompleter, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
                                QPlainTextEdit, QTabWidget, QTreeWidget)
 
 from .. import paths
@@ -11,6 +11,7 @@ from ..sso import SCOPES
 from ..sync import location_kind
 from ..model import ROMAN, fmt_duration, fmt_isk, fmt_sp, fmt_time, fmt_time_short, parse_time
 from .. import alerts
+from .. import navigation as nav
 from .theme import ACCENT
 from .widgets import (USER_ROLE, Card, InfoBox, Page, SortItem, TreeItem, fill_table, avatar_placeholder, isk_color, make_table, muted, round_pixmap, sec_color, sec_text)
 
@@ -348,11 +349,26 @@ class AssetsPage(Page):
         self._debounce.timeout.connect(self.refresh_view)
         self.search.textChanged.connect(lambda _: self._debounce.start())
         self.total = muted(wrap=False)
+        self.near = QLineEdit(self.ctx.db.get_setting("assets_near", ""))
+        self.near.setPlaceholderText("Near system…")
+        self.near.setToolTip("Enter a system to sort locations by distance from it: gate jumps (using your known "
+                             "jump bridges) and light years.")
+        self.near.setClearButtonEnabled(True)
+        self.near.setMaximumWidth(170)
+        self._near_names = QStringListModel()
+        completer = QCompleter(self._near_names, self.near)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.near.setCompleter(completer)
+        self.near.editingFinished.connect(self._near_changed)
+        self.near.textChanged.connect(lambda t: self._near_changed() if not t else None)
+        self._universe = None
+        self._sorted_by_distance = None
         card.add_tool(self.total)
         card.add_tool(self.all_chars)
+        card.add_tool(self.near)
         card.add_tool(self.search)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Item / location", "Quantity", "Est. value (ISK)", "Owner", "Where"])
+        self.tree.setHeaderLabels(["Item / location", "Distance", "Quantity", "Est. value (ISK)", "Owner", "Where"])
         self.tree.setSortingEnabled(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -364,8 +380,55 @@ class AssetsPage(Page):
                             "ESI refreshes assets about once an hour. Right-click a structure your characters "
                             "can't dock at to give it a name."))
 
+    def _near_changed(self):
+        text = self.near.text().strip()
+        if text != self.ctx.db.get_setting("assets_near", ""):
+            self.ctx.db.set_setting("assets_near", text)
+            self._sorted_by_distance = None  # a new reference system: sort closest first again
+            self.refresh_view()
+
+    def _distance_lookup(self):
+        """A function location id -> (text, sort key, tooltip), or None when no reference system is set."""
+        u, text = self.ctx.universe, self.near.text().strip()
+        if not text:
+            return None, ""
+        if u is None:
+            return None, "map data not loaded yet"
+        ref = u.find(text)
+        if ref is None:
+            return None, f"unknown system: {text}"
+        bridges = [(b["a"], b["b"]) for b in nav.all_bridges(self.ctx.db, u, [c["character_id"]
+                                                                                for c in self.ctx.characters()])]
+        jumps = u.jump_distances(ref, bridges)
+        view = self.ctx.view
+        cache = {}
+
+        def lookup(lid):
+            if lid in cache:
+                return cache[lid]
+            system = view.location_system(lid, u)
+            if system is None or system not in u.systems:
+                result = ("?", 9e9, "Unknown system (e.g. a structure none of your characters can see)")
+            else:
+                j, ly = jumps.get(system), u.distance_ly(ref, system)
+                label = ("here" if j == 0 else f"{j} jump{'s' if j != 1 else ''}") if j is not None else "no gate route"
+                label += f" · {ly:.1f} LY" if j != 0 else ""
+                result = (label, (j if j is not None else 1e6) + ly / 1000,
+                          f"{u.name(system)}, {u.region_name(system)}: {label} from {u.name(ref)}")
+            cache[lid] = result
+            return result
+
+        return lookup, f"distances from {u.name(ref)}"
+
     def refresh_view(self):
         v = self.ctx.view
+        u = self.ctx.universe
+        if u is not self._universe:
+            self._universe = u
+            if u:
+                self._near_names.setStringList(sorted(sys_.name for sys_ in u.systems.values()))
+        distance, near_note = self._distance_lookup()
+        self.tree.setColumnHidden(1, distance is None)
         if self.all_chars.isChecked():
             cids = [c["character_id"] for c in self.ctx.characters()]
         else:
@@ -376,12 +439,18 @@ class AssetsPage(Page):
         self.tree.setUpdatesEnabled(False)
         self.tree.clear()
         if query:
-            matches = [(n, p) for n, p in v.flatten_assets(roots) if query in n["name"].lower()]
-            for node, path in matches[:5000]:
+            matches = [(n, p, r) for n, p, r in v.flatten_assets(roots) if query in n["name"].lower()]
+            for node, path, root in matches[:5000]:
                 item = self._node_item(node, owners, path)
+                if distance:
+                    label, key, tip = distance(root)
+                    item.setText(1, label)
+                    item.setToolTip(1, tip)
+                    item.sort_keys[1] = key
                 self.tree.addTopLevelItem(item)
-            value = sum(n["value"] for n, _ in matches)
-            self.total.setText(f"{len(matches)} matches · {fmt_isk(value)} ISK")
+            value = sum(n["value"] for n, _, _ in matches)
+            self.total.setText(f"{len(matches)} matches · {fmt_isk(value)} ISK"
+                               + (f" · {near_note}" if near_note else ""))
         else:
             grand = 0.0
             kinds = self.ctx.db.get_name_entries([r["location_id"] for r in roots])
@@ -389,8 +458,13 @@ class AssetsPage(Page):
                 grand += root["total"]
                 kind = kinds.get(root["location_id"], (None, None))[1]
                 name = root["name"] + ("  (your name)" if kind == "structure_custom" else "")
-                top = TreeItem([name, len(root["items"]), fmt_isk(root["total"]), "", ""],
-                               {1: len(root["items"]), 2: root["total"]}, data=root["location_id"])
+                top = TreeItem([name, "", len(root["items"]), fmt_isk(root["total"]), "", ""],
+                               {2: len(root["items"]), 3: root["total"]}, data=root["location_id"])
+                if distance:
+                    label, key, tip = distance(root["location_id"])
+                    top.setText(1, label)
+                    top.setToolTip(1, tip)
+                    top.sort_keys[1] = key
                 if kind in ("structure_unknown", "structure_custom"):
                     top.setToolTip(0, "None of your characters can dock here, so EVE won't say what this "
                                       "structure is. Right-click to give it your own name.")
@@ -400,10 +474,17 @@ class AssetsPage(Page):
                 for node in root["items"]:
                     top.addChild(self._node_item(node, owners))
                 self.tree.addTopLevelItem(top)
-            self.total.setText(f"{len(roots)} locations · {fmt_isk(grand)} ISK")
-        self.tree.sortByColumn(self.tree.sortColumn(), self.tree.header().sortIndicatorOrder())
+            self.total.setText(f"{len(roots)} locations · {fmt_isk(grand)} ISK"
+                               + (f" · {near_note}" if near_note else ""))
+        if distance and self._sorted_by_distance is not True:
+            self.tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)  # closest first when a system is entered
+        elif not distance and self.tree.sortColumn() == 1:
+            self.tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        else:
+            self.tree.sortByColumn(self.tree.sortColumn(), self.tree.header().sortIndicatorOrder())
+        self._sorted_by_distance = bool(distance)
         self.tree.setUpdatesEnabled(True)
-        for c in (1, 2, 3):
+        for c in (1, 2, 3, 4):
             self.tree.resizeColumnToContents(c)
 
     def _location_menu(self, pos):
@@ -437,9 +518,9 @@ class AssetsPage(Page):
     def _node_item(self, node, owners, path=""):
         a = node["item"]
         flag = a.get("location_flag", "")
-        item = TreeItem([node["name"], f"{a['quantity']:,}", fmt_isk(node["total"]) if node["total"] else "",
+        item = TreeItem([node["name"], "", f"{a['quantity']:,}", fmt_isk(node["total"]) if node["total"] else "",
                          owners.get(node["owner"], ""), path or flag],
-                        {1: a["quantity"], 2: node["total"]})
+                        {2: a["quantity"], 3: node["total"]})
         for child in node["children"]:
             item.addChild(self._node_item(child, owners))
         return item

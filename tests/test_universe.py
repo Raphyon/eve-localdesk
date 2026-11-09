@@ -220,3 +220,33 @@ def test_grouped_ships():
     assert [g for g, _ in grouped] == ["Black Ops", "Jump Freighter", "Capital Industrial (Rorqual)", "Carrier",
                                        "Mystery"]
     assert [s["name"] for s in grouped[3][1]] == ["Archon", "Thanatos"]
+
+
+def test_jump_distances_and_station_systems(u, db):
+    d = u.jump_distances(1)
+    assert d[1] == 0 and d[3] == 2 and d[11] == 3 and d[15] == 6   # H1-H3-N1-N6-N7-N5
+    assert u.jump_distances(1, bridges=[(3, 15)])[15] == 3       # a bridge shortcut counts as one jump
+    systems = ("regionID,constellationID,solarSystemID,solarSystemName,x,y,z,security\n"
+               "10000002,20000001,30000001,Tanoo,1e16,0,0,0.85\n")
+    stations = "stationID,solarSystemID,stationName\n60000001,30000001,Tanoo V - Moon 1\n"
+    t = Universe.from_tables(systems, "fromSolarSystemID,toSolarSystemID\n", "regionID,regionName\n", stations)
+    assert t.station_systems == {60000001: 30000001}
+    assert Universe.from_json(t.to_json()).station_systems == {60000001: 30000001}
+    # older saved map data without station ids still loads
+    old = t.to_json()
+    del old["station_systems"]
+    assert Universe.from_json(old).station_systems == {}
+
+
+def test_location_system(db):
+    import time
+    from localdesk.model import DataView
+    view = DataView(db, None)
+    t = Universe({30000001: System(30000001, "Tanoo", 1, 1, 0, 0, 0, 0.9)}, {}, {}, {}, {60000001: 30000001})
+    assert view.location_system(30000001, t) == 30000001                 # items in space
+    assert view.location_system(60000001, t) == 30000001                 # NPC station from map data
+    db.cache_put(0, "station:60000002", {"system_id": 30000002}, time.time() + 999)
+    assert view.location_system(60000002, t) == 30000002                 # station looked up via ESI
+    db.cache_put(0, "structure:1035000000001", {"solar_system_id": 30000003}, time.time() + 999)
+    assert view.location_system(1035000000001, t) == 30000003            # structure
+    assert view.location_system(1035000000002, t) is None                # unknown structure

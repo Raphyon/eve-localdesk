@@ -193,11 +193,30 @@ class DataView:
 
     @staticmethod
     def flatten_assets(roots):
-        """Yield (node, path) for every item, where path is 'Location › Container › …'."""
-        def walk(node, path):
-            yield node, path
+        """Yield (node, path, root location id) for every item; path is 'Location › Container › …'."""
+        def walk(node, path, root):
+            yield node, path, root
             for child in node["children"]:
-                yield from walk(child, f"{path} › {node['name']}")
+                yield from walk(child, f"{path} › {node['name']}", root)
         for root in roots:
             for node in root["items"]:
-                yield from walk(node, root["name"])
+                yield from walk(node, root["name"], root["location_id"])
+
+    def location_system(self, location_id, universe=None):
+        """Solar system of an asset location (system, NPC station or player structure), or None."""
+        kind = location_kind(location_id)
+        if kind == "system":
+            return location_id
+        if kind == "station":
+            if universe is not None and location_id in universe.station_systems:
+                return universe.station_systems[location_id]
+            return (self.db.cache_get(0, f"station:{location_id}") or {}).get("system_id")
+        if kind == "structure":
+            info = self.db.cache_get(0, f"structure:{location_id}") or {}
+            if info.get("solar_system_id"):
+                return info["solar_system_id"]
+            for ch in self.db.list_characters():
+                for s in self.db.cache_get(ch["character_id"], "access_structures") or []:
+                    if s["id"] == location_id:
+                        return s.get("system_id")
+        return None

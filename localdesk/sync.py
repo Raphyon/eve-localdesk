@@ -480,10 +480,14 @@ class Syncer:
 
         ids, structures = set(), set()
 
+        stations = set()
+
         def add_location(lid):
             if not lid:
                 return
             kind = location_kind(lid)
+            if kind == "station":
+                stations.add(lid)
             if kind == "structure":
                 structures.add(lid)
             elif kind in ("station", "system", "other"):
@@ -533,6 +537,22 @@ class Syncer:
         self.resolve(ids - list_ids)
         if structures:
             self.resolve_structures(cid, structures)
+        self.station_info(stations)
+
+    def station_info(self, station_ids):
+        """Which system each NPC station is in (public, cached for a month), for distances in Assets."""
+        todo = [s for s in station_ids if not self.db.cache_row(0, f"station:{s}")]
+        if not todo:
+            return
+
+        def one(sid):
+            try:
+                self.fetch(0, f"station:{sid}", f"/universe/stations/{sid}/", auth=False, ttl=LONG_TTL)
+            except ESIError:
+                pass
+
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(one, todo))
 
     # --- static-ish public data -------------------------------------------
     def system(self, system_id):
