@@ -437,8 +437,10 @@ class Syncer:
         remembered for a day (each one counts against ESI's error limit). Names you gave a structure
         yourself are kept until EVE reveals the real one."""
         entries = self.db.get_name_entries(structure_ids)
+        # also structures named by older versions that never stored which system they're in
         todo = [s for s in structure_ids
-                if s not in entries or entries[s][1] in ("structure_unknown", "structure_custom")]
+                if s not in entries or entries[s][1] in ("structure_unknown", "structure_custom")
+                or not self.db.cache_row(0, f"structure:{s}")]
         if not todo:
             return
         characters = self.db.list_characters()
@@ -538,6 +540,17 @@ class Syncer:
         if structures:
             self.resolve_structures(cid, structures)
         self.station_info(stations)
+
+    def locate(self, location_ids):
+        """Look up which system each asset location is in, for locations not known yet: NPC stations via
+        ESI's public station data, structures through whichever of your characters can see them."""
+        stations = [lid for lid in location_ids if location_kind(lid) == "station"]
+        structures = {lid for lid in location_ids if location_kind(lid) == "structure"}
+        self.station_info(stations)
+        if structures:
+            asker = next((c["character_id"] for c in self.db.list_characters() if S_STRUCTURES in c["scopes"]), None)
+            if asker:
+                self.resolve_structures(asker, structures)
 
     def station_info(self, station_ids):
         """Which system each NPC station is in (public, cached for a month), for distances in Assets."""

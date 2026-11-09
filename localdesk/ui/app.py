@@ -333,6 +333,11 @@ class MainWindow(QMainWindow):
             self.ctx.universe = u
             self.log(f"Map data ready: {len(u.systems):,} systems, {len(u.regions)} regions")
             self.data_changed.emit()
+            if not u.station_systems and not download and self.ctx.db.get_setting("map_refreshed_for_stations") != "1":
+                # saved by an older version without station locations: fetch a fresh copy once
+                self.ctx.db.set_setting("map_refreshed_for_stations", "1")
+                self.log("Updating saved map data with station locations (one time)…")
+                self.load_universe(download=True)
 
         self.run_task(job, done, lambda e: self.log(f"Could not load map data: {e}"))
 

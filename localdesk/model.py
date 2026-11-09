@@ -202,21 +202,39 @@ class DataView:
             for node in root["items"]:
                 yield from walk(node, root["name"], root["location_id"])
 
+    def location_systems(self, location_ids, universe=None):
+        """{location id: (system id or None, reason)} for asset locations, reading everything known in a
+        few queries. reason is "" when found, else "pending" (not looked up yet), "hidden" (a structure
+        none of your characters can see) or "unknown"."""
+        stations = {int(k.split(":")[1]): v.get("system_id")
+                    for k, v in self.db.cache_prefix(0, "station:").items() if isinstance(v, dict)}
+        structures = {int(k.split(":")[1]): v.get("solar_system_id")
+                      for k, v in self.db.cache_prefix(0, "structure:").items() if isinstance(v, dict)}
+        manual = {int(k.split(":")[1]): v["system_id"]
+                  for k, v in self.db.cache_prefix(0, "location_system:").items()
+                  if isinstance(v, dict) and v.get("system_id")}
+        denied = {int(k.split(":")[1]) for k in self.db.cache_prefix(0, "structure_denied:")}
+        access = {}
+        for ch in self.db.list_characters():
+            for st in self.db.cache_get(ch["character_id"], "access_structures") or []:
+                access.setdefault(st["id"], st.get("system_id"))
+        out = {}
+        for lid in location_ids:
+            kind = location_kind(lid)
+            if kind == "system":
+                out[lid] = (lid, "")
+            elif lid in manual:
+                out[lid] = (manual[lid], "")
+            elif kind == "station":
+                sid = (universe.station_systems.get(lid) if universe is not None else None) or stations.get(lid)
+                out[lid] = (sid, "" if sid else "pending")
+            elif kind == "structure":
+                sid = structures.get(lid) or access.get(lid)
+                out[lid] = (sid, "" if sid else "hidden" if lid in denied else "pending")
+            else:
+                out[lid] = (None, "unknown")
+        return out
+
     def location_system(self, location_id, universe=None):
-        """Solar system of an asset location (system, NPC station or player structure), or None."""
-        kind = location_kind(location_id)
-        if kind == "system":
-            return location_id
-        if kind == "station":
-            if universe is not None and location_id in universe.station_systems:
-                return universe.station_systems[location_id]
-            return (self.db.cache_get(0, f"station:{location_id}") or {}).get("system_id")
-        if kind == "structure":
-            info = self.db.cache_get(0, f"structure:{location_id}") or {}
-            if info.get("solar_system_id"):
-                return info["solar_system_id"]
-            for ch in self.db.list_characters():
-                for s in self.db.cache_get(ch["character_id"], "access_structures") or []:
-                    if s["id"] == location_id:
-                        return s.get("system_id")
-        return None
+        """Solar system of one asset location (system, NPC station or player structure), or None."""
+        return self.location_systems([location_id], universe)[location_id][0]

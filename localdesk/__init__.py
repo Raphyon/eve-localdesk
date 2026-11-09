@@ -1,3 +1,3 @@
 """EVE LocalDesk - a local, serverless character management tool for EVE Online."""
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"

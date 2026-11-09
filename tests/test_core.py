@@ -419,3 +419,45 @@ def test_fit_widths_shrinks_widest_columns_first():
     assert w[0] == 110 and w[2] == 90 and sum(w) <= 400
     # minimums don't fit: return them (the table scrolls as a last resort)
     assert fit_widths([200, 200], 100, [120, 120]) == [120, 120]
+
+
+def test_location_systems_batch_and_reasons(db):
+    from localdesk.model import DataView
+    from localdesk.universe import System, Universe
+    view = DataView(db, None)
+    now = time.time()
+    u = Universe({30000001: System(30000001, "A", 1, 1, 0, 0, 0, 0.9)}, {}, {}, {}, {60000001: 30000001})
+    add_char(db, 90000050, "Scout")
+    db.cache_put(90000050, "access_structures", [{"id": 1035000000001, "name": "A - Fort", "system_id": 30000001}],
+                 now + 999)
+    db.cache_put(0, "station:60000002", {"system_id": 30000002}, now + 999)
+    db.cache_put(0, "structure_denied:1035000000003", True, now + 999)
+    db.cache_put(0, "location_system:1035000000004", {"system_id": 30000004}, now + 999)
+    got = view.location_systems([30000009, 60000001, 60000002, 60000003, 1035000000001, 1035000000002,
+                                 1035000000003, 1035000000004, 2004], u)
+    assert got[30000009] == (30000009, "")
+    assert got[60000001] == (30000001, "")          # from map data
+    assert got[60000002] == (30000002, "")          # from ESI station lookup
+    assert got[60000003] == (None, "pending")       # not looked up yet
+    assert got[1035000000001] == (30000001, "")     # from an access scan
+    assert got[1035000000002] == (None, "pending")
+    assert got[1035000000003] == (None, "hidden")   # nobody can see it
+    assert got[1035000000004] == (30000004, "")     # set by hand
+    assert got[2004][1] == "unknown"                # asset safety
+    assert db.cache_prefix(0, "station:") == {"station:60000002": {"system_id": 30000002}}
+
+
+def test_old_structure_names_get_their_system(db):
+    from localdesk.sync import S_STRUCTURES
+    cid = 90000051
+    add_char(db, cid, "Main", scopes=[S_STRUCTURES])
+    # named by an older version: name known, but no structure info with its system
+    db.put_names([(1035000000010, "X - Old Fort", "structure")])
+    esi = FakeESI({("GET", "/universe/structures/1035000000010/"): {"name": "X - Old Fort",
+                                                                     "solar_system_id": 30000142},
+                   ("GET", "/universe/stations/60000001/"): {"system_id": 30000144, "name": "S"},
+                   ("POST", "/universe/names/"): lambda p, ids: [{"id": i, "name": "Jita", "category": "x"}
+                                                                for i in ids]})
+    Syncer(db, esi).locate([1035000000010, 60000001])
+    assert db.cache_get(0, "structure:1035000000010")["solar_system_id"] == 30000142
+    assert db.cache_get(0, "station:60000001")["system_id"] == 30000144

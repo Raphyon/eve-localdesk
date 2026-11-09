@@ -4,6 +4,7 @@ import time
 from PySide6.QtCore import QStringListModel, Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QCheckBox, QCompleter, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
+                               QMessageBox,
                                QPlainTextEdit, QTabWidget, QTreeWidget)
 
 from .. import paths
@@ -363,6 +364,9 @@ class AssetsPage(Page):
         self.near.textChanged.connect(lambda t: self._near_changed() if not t else None)
         self._universe = None
         self._sorted_by_distance = None
+        self._location_systems = {}
+        self._looking_up = set()
+        self._located = set()
         card.add_tool(self.total)
         card.add_tool(self.all_chars)
         card.add_tool(self.near)
@@ -379,6 +383,21 @@ class AssetsPage(Page):
         lay.addWidget(muted("Values use CCP's average market prices; blueprint copies count as 0. "
                             "ESI refreshes assets about once an hour. Right-click a structure your characters "
                             "can't dock at to give it a name."))
+
+    def _fetch_missing_systems(self):
+        """Ask ESI right away (in the background) for locations whose system isn't known yet."""
+        missing = {lid for lid, (sid, why) in self._location_systems.items()
+                   if why == "pending" and lid not in self._looking_up}
+        if not missing:
+            return
+        self._looking_up |= missing
+
+        def done(_):
+            self._located |= missing  # asked once: anything still unknown now shows "?" with the reason
+            self.refresh_view()
+
+        self.ctx.run(lambda p: self.ctx.syncer.locate(missing), done, on_error=lambda e: self.ctx.log(
+            f"Looking up asset locations failed: {e}"))
 
     def _near_changed(self):
         text = self.near.text().strip()
@@ -400,15 +419,23 @@ class AssetsPage(Page):
         bridges = [(b["a"], b["b"]) for b in nav.all_bridges(self.ctx.db, u, [c["character_id"]
                                                                                 for c in self.ctx.characters()])]
         jumps = u.jump_distances(ref, bridges)
-        view = self.ctx.view
+        systems = self._location_systems
+        reasons = {"pending": "Looking up which system this is in…",
+                   "hidden": "A structure none of your characters can see, so EVE won't say where it is. "
+                             "Right-click to set its system yourself.",
+                   "unknown": "Not a station, structure or system (e.g. asset safety)."}
         cache = {}
 
         def lookup(lid):
             if lid in cache:
                 return cache[lid]
-            system = view.location_system(lid, u)
-            if system is None or system not in u.systems:
-                result = ("?", 9e9, "Unknown system (e.g. a structure none of your characters can see)")
+            system, why = systems.get(lid, (None, "pending"))
+            if why == "pending" and lid in self._located:
+                why = "hidden" if location_kind(lid) == "structure" else "unknown"
+            if system is None:
+                result = ("…" if why == "pending" else "?", 9e9, reasons.get(why, ""))
+            elif system not in u.systems:
+                result = ("J-space", 8e9, "Wormhole space: no gate route or jump distance.")
             else:
                 j, ly = jumps.get(system), u.distance_ly(ref, system)
                 label = ("here" if j == 0 else f"{j} jump{'s' if j != 1 else ''}") if j is not None else "no gate route"
@@ -427,14 +454,21 @@ class AssetsPage(Page):
             self._universe = u
             if u:
                 self._near_names.setStringList(sorted(sys_.name for sys_ in u.systems.values()))
-        distance, near_note = self._distance_lookup()
-        self.tree.setColumnHidden(1, distance is None)
         if self.all_chars.isChecked():
             cids = [c["character_id"] for c in self.ctx.characters()]
         else:
             cids = [self.ctx.current_char] if self.ctx.current_char else []
         owners = {c["character_id"]: c["name"] for c in self.ctx.characters()}
         roots = v.asset_tree(cids)
+        if self.near.text().strip():
+            self._location_systems = v.location_systems([r["location_id"] for r in roots], u)
+            self._fetch_missing_systems()
+        distance, near_note = self._distance_lookup()
+        self.tree.setColumnHidden(1, distance is None)
+        pending = sum(1 for lid, (sid, why) in self._location_systems.items()
+                      if why == "pending" and lid not in self._located) if distance else 0
+        if pending:
+            near_note += f" (looking up {pending} location{'s' if pending != 1 else ''}…)"
         query = self.search.text().strip().lower()
         self.tree.setUpdatesEnabled(False)
         self.tree.clear()
@@ -499,6 +533,7 @@ class AssetsPage(Page):
         menu = QMenu(self)
         menu.addAction("Name this location…", lambda: self._name_location(lid, name if kind == "structure_custom"
                                                                            else ""))
+        menu.addAction("Set this location's system…", lambda: self._set_location_system(lid))
         if kind == "structure_custom":
             menu.addAction("Remove my name", lambda: self._clear_location_name(lid))
         menu.exec(self.tree.viewport().mapToGlobal(pos))
@@ -510,6 +545,24 @@ class AssetsPage(Page):
         if ok and text.strip():
             self.ctx.db.put_names([(lid, text.strip(), "structure_custom")])
             self.ctx.window.data_changed.emit()
+
+    def _set_location_system(self, lid):
+        u = self.ctx.universe
+        current = (self.ctx.db.cache_get(0, f"location_system:{lid}") or {}).get("system_id")
+        text, ok = QInputDialog.getText(self, "Set this location's system",
+                                        "Which system is this structure in? (used for distances)\n"
+                                        "Leave empty to clear.", text=u.name(current) if u and current else "")
+        if not ok:
+            return
+        if not text.strip():
+            self.ctx.db.cache_put(0, f"location_system:{lid}", {}, 0)
+        else:
+            sid = u.find(text) if u else None
+            if sid is None:
+                QMessageBox.warning(self, "Unknown system", f"No system called “{text.strip()}”.")
+                return
+            self.ctx.db.cache_put(0, f"location_system:{lid}", {"system_id": sid}, time.time() + 3650 * 86400)
+        self.refresh_view()
 
     def _clear_location_name(self, lid):
         self.ctx.db.put_names([(lid, f"Unknown structure #{lid} (no docking access)", "structure_unknown")])

@@ -120,6 +120,13 @@ class Database:
         row = self.cache_row(character_id, key)
         return row["data"] if row else default
 
+    def cache_prefix(self, character_id, prefix):
+        """{key: data} for every cached entry whose key starts with prefix (one query)."""
+        pattern = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        rows = self._all("SELECT key, data FROM cache WHERE character_id = ? AND key LIKE ? ESCAPE '\\'",
+                         (character_id, pattern))
+        return {r["key"]: json.loads(r["data"]) for r in rows}
+
     def cache_put(self, character_id, key, data, expires_at):
         self._execute(
             "INSERT OR REPLACE INTO cache (character_id, key, data, fetched_at, expires_at) VALUES (?, ?, ?, ?, ?)",
