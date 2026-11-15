@@ -1,7 +1,8 @@
 """Shared Qt helpers."""
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QMenu,
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QKeySequence, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel,
+                               QMenu,
                                QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -302,6 +303,107 @@ class TreeItem(QTreeWidgetItem):
             return str(a) < str(b)
 
 
+class _SelectionKeys(QObject):
+    """Ctrl+C copies the selected rows; Space ticks/unticks every selected row that has a checkbox."""
+
+    def __init__(self, view):
+        super().__init__(view)
+        self.view = view
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            if event.matches(QKeySequence.StandardKey.Copy):
+                copy_selection(self.view)
+                return True
+            if event.key() == Qt.Key.Key_Space and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                items = _checkable_selected(self.view)
+                if items:
+                    on = any(i.checkState() != Qt.CheckState.Checked for i in items)
+                    set_checks(self.view, on)
+                    return True
+        return False
+
+
+def install_selection_tools(view, menu_hook=None):
+    """Multi-select (Ctrl/Shift+click, Ctrl+A), Ctrl+C to copy rows as tab-separated text (pastes into a
+    spreadsheet), Space to tick selected checkboxes, and a right-click menu with Copy / Select all /
+    Tick selected. menu_hook(menu, pos) can add the view's own actions to the top of that menu."""
+    view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    view.customContextMenuRequested.connect(lambda pos: _selection_menu(view, pos))
+    view.menu_hook = menu_hook
+    view._selection_keys = _SelectionKeys(view)
+    view.installEventFilter(view._selection_keys)
+
+
+def _rows(view):
+    """[(row texts)] for the selected rows, in display order, visible columns only; plus header texts."""
+    from PySide6.QtWidgets import QListWidget, QTreeWidget, QTreeWidgetItemIterator
+    if isinstance(view, QTableWidget):
+        cols = [c for c in range(view.columnCount()) if not view.isColumnHidden(c)]
+        rows = sorted({i.row() for i in view.selectedIndexes()})
+        header = [view.horizontalHeaderItem(c).text() if view.horizontalHeaderItem(c) else "" for c in cols]
+        return header, [[view.item(r, c).text() if view.item(r, c) else "" for c in cols] for r in rows]
+    if isinstance(view, QTreeWidget):
+        cols = [c for c in range(view.columnCount()) if not view.isColumnHidden(c)]
+        selected = set(map(id, view.selectedItems()))
+        rows, it = [], QTreeWidgetItemIterator(view)
+        while it.value():
+            if id(it.value()) in selected:
+                rows.append([it.value().text(c) for c in cols])
+            it += 1
+        return [view.headerItem().text(c) for c in cols], rows
+    if isinstance(view, QListWidget):
+        return [], [[view.item(r).text()] for r in range(view.count()) if view.item(r).isSelected()]
+    return [], []
+
+
+def copy_selection(view):
+    header, rows = _rows(view)
+    if not rows:
+        return 0
+    lines = ([header] if header and len(rows) > 1 else []) + rows
+    QApplication.clipboard().setText("\n".join("\t".join(cell.replace("\t", " ") for cell in r) for r in lines))
+    return len(rows)
+
+
+def _checkable_selected(view):
+    from PySide6.QtWidgets import QListWidget
+    if isinstance(view, QTableWidget):
+        items = [view.item(r, 0) for r in sorted({i.row() for i in view.selectedIndexes()})]
+    elif isinstance(view, QListWidget):
+        items = view.selectedItems()
+    else:
+        return []
+    return [i for i in items if i is not None and i.flags() & Qt.ItemFlag.ItemIsUserCheckable]
+
+
+def set_checks(view, on):
+    for item in _checkable_selected(view):
+        item.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+
+
+def _selection_menu(view, pos):
+    menu = QMenu(view)
+    hook = getattr(view, "menu_hook", None)
+    if hook:
+        hook(menu, pos)
+        if not menu.isEmpty():
+            menu.addSeparator()
+    count = len(_rows(view)[1])
+    copy = menu.addAction(f"Copy {count} row{'s' if count != 1 else ''}" if count else "Copy",
+                          lambda: copy_selection(view))
+    copy.setShortcut(QKeySequence.StandardKey.Copy)
+    copy.setEnabled(count > 0)
+    select_all = menu.addAction("Select all", view.selectAll)
+    select_all.setShortcut(QKeySequence.StandardKey.SelectAll)
+    if _checkable_selected(view):
+        menu.addSeparator()
+        menu.addAction("Tick selected", lambda: set_checks(view, True)).setShortcut(QKeySequence(Qt.Key.Key_Space))
+        menu.addAction("Untick selected", lambda: set_checks(view, False))
+    menu.exec(view.viewport().mapToGlobal(pos))
+
+
 def fit_widths(natural, available, minimum=48):
     """Shrink the widest columns first ("water filling") until they fit in `available` pixels.
     `minimum` is a number or a per-column list: no column goes below it (or below its natural width
@@ -338,8 +440,10 @@ class FitTable(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection if selectable
-                              else QAbstractItemView.SelectionMode.NoSelection)
+        if selectable:
+            install_selection_tools(self)
+        else:
+            self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
         self.setShowGrid(False)

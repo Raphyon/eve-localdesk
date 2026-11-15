@@ -3,7 +3,7 @@ import time
 
 from PySide6.QtCore import QStringListModel, Qt, QTimer
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QCompleter, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
+from PySide6.QtWidgets import (QCheckBox, QCompleter, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
                                QMessageBox,
                                QPlainTextEdit, QTabWidget, QTreeWidget)
 
@@ -14,7 +14,8 @@ from ..model import ROMAN, fmt_duration, fmt_isk, fmt_sp, fmt_time, fmt_time_sho
 from .. import alerts
 from .. import navigation as nav
 from .theme import ACCENT
-from .widgets import (USER_ROLE, Card, InfoBox, Page, SortItem, TreeItem, fill_table, avatar_placeholder, isk_color, make_table, muted, round_pixmap, sec_color, sec_text)
+from .widgets import (USER_ROLE, Card, InfoBox, Page, SortItem, TreeItem, fill_table, avatar_placeholder,
+                      install_selection_tools, isk_color, make_table, muted, round_pixmap, sec_color, sec_text)
 
 
 def _placeholder(text):
@@ -376,8 +377,9 @@ class AssetsPage(Page):
         self.tree.setSortingEnabled(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self._location_menu)
+        install_selection_tools(self.tree, menu_hook=self._location_menu)
+        self.tree.itemSelectionChanged.connect(self._selection_summary)
+        self._summary = ""
         card.add(self.tree, 1)
         lay.addWidget(card, 1)
         lay.addWidget(muted("Values use CCP's average market prices; blueprint copies count as 0. "
@@ -483,8 +485,8 @@ class AssetsPage(Page):
                     item.sort_keys[1] = key
                 self.tree.addTopLevelItem(item)
             value = sum(n["value"] for n, _, _ in matches)
-            self.total.setText(f"{len(matches)} matches · {fmt_isk(value)} ISK"
-                               + (f" · {near_note}" if near_note else ""))
+            self._summary = f"{len(matches)} matches · {fmt_isk(value)} ISK" + (f" · {near_note}" if near_note else "")
+            self.total.setText(self._summary)
         else:
             grand = 0.0
             kinds = self.ctx.db.get_name_entries([r["location_id"] for r in roots])
@@ -508,8 +510,8 @@ class AssetsPage(Page):
                 for node in root["items"]:
                     top.addChild(self._node_item(node, owners))
                 self.tree.addTopLevelItem(top)
-            self.total.setText(f"{len(roots)} locations · {fmt_isk(grand)} ISK"
-                               + (f" · {near_note}" if near_note else ""))
+            self._summary = f"{len(roots)} locations · {fmt_isk(grand)} ISK" + (f" · {near_note}" if near_note else "")
+            self.total.setText(self._summary)
         if distance and self._sorted_by_distance is not True:
             self.tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)  # closest first when a system is entered
         elif not distance and self.tree.sortColumn() == 1:
@@ -521,7 +523,8 @@ class AssetsPage(Page):
         for c in (1, 2, 3, 4):
             self.tree.resizeColumnToContents(c)
 
-    def _location_menu(self, pos):
+    def _location_menu(self, menu, pos):
+        """Structure actions for the location under the mouse, added to the tree's right-click menu."""
         item = self.tree.itemAt(pos)
         lid = item.data(0, USER_ROLE) if item is not None and item.parent() is None else None
         if not lid or location_kind(int(lid)) != "structure":
@@ -530,13 +533,30 @@ class AssetsPage(Page):
         name, kind = self.ctx.db.get_name_entries([lid]).get(lid, (None, None))
         if kind == "structure":
             return  # EVE already gave us its real name
-        menu = QMenu(self)
         menu.addAction("Name this location…", lambda: self._name_location(lid, name if kind == "structure_custom"
                                                                            else ""))
         menu.addAction("Set this location's system…", lambda: self._set_location_system(lid))
         if kind == "structure_custom":
             menu.addAction("Remove my name", lambda: self._clear_location_name(lid))
-        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _selection_summary(self):
+        """'N selected · value' next to the totals; a container and its contents aren't counted twice."""
+        chosen = self.tree.selectedItems()
+        if len(chosen) < 2:
+            self.total.setText(self._summary)
+            return
+        ids = set(map(id, chosen))
+
+        def ancestor_selected(item):
+            parent = item.parent()
+            while parent is not None:
+                if id(parent) in ids:
+                    return True
+                parent = parent.parent()
+            return False
+
+        value = sum(i.sort_keys.get(3, 0) or 0 for i in chosen if not ancestor_selected(i))
+        self.total.setText(f"{self._summary} · <b>{len(chosen)} selected · {fmt_isk(value)} ISK</b>")
 
     def _name_location(self, lid, current):
         text, ok = QInputDialog.getText(self, "Name this location",

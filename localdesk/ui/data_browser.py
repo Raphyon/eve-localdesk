@@ -73,6 +73,8 @@ class DatasetView(Card):
         self.body.setSpacing(0)
         self.add(self.note)
         self.table = make_table(["—"])
+        self.table.itemSelectionChanged.connect(self._selection_summary)
+        self._summary = ""
         self.add(self.table, 1)
         self._rows, self._action_buttons, self._division_key = [], [], None
 
@@ -186,7 +188,20 @@ class DatasetView(Card):
         summary = f"{len(table_rows):,} rows" + (" (capped)" if len(table_rows) >= MAX_ROWS else "")
         for header, total in totals.items():
             summary += f" · {header.lower()} {fmt_isk(total)}"
+        self._summary = summary
         self.count.setText(summary)
+
+    def _selection_summary(self):
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        if len(rows) < 2 or self.ds is None:
+            self.count.setText(self._summary)
+            return
+        chosen = [self._rows[self.table.item(r, 0).data(USER_ROLE)][1] for r in rows if self.table.item(r, 0)]
+        text = f"<b>{len(chosen)} selected</b>"
+        for c in self.ds.cols:
+            if c.kind == "isk" and c.header in TOTAL_COLUMNS:
+                text += f" · {c.header.lower()} <b>{fmt_isk(sum(c.value(r) or 0 for r in chosen))}</b>"
+        self.count.setText(text)
 
     def _cell(self, col, raw, names, now):
         kind = col.kind

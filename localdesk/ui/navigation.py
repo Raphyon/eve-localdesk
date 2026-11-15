@@ -16,8 +16,8 @@ from ..sync import S_SEARCH_STRUCTURES, S_STRUCTURES, S_WAYPOINT
 from ..universe import parse_bridge_list
 from .map_view import StarMap
 from .theme import ACCENT
-from .widgets import (USER_ROLE, Card, Page, SortItem, button, fill_char_combo, fill_table, make_table, muted,
-                      sec_color, sec_text)
+from .widgets import (USER_ROLE, Card, Page, SortItem, button, fill_char_combo, fill_table, install_selection_tools,
+                      make_table, muted, sec_color, sec_text)
 
 ROUTE_MODES = [("Shortest", "shortest"), ("Safer (prefer high-sec)", "secure"), ("Less secure (avoid high-sec)",
                                                                                  "insecure")]
@@ -158,8 +158,7 @@ class NavigationPage(Page):
         summary.setContentsMargins(14, 10, 14, 10)
         summary.setWordWrap(True)
         table = make_table(headers, stretch=stretch)
-        table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        table.customContextMenuRequested.connect(lambda pos, t=table: self._table_menu(t, pos))
+        table.menu_hook = lambda menu, pos, t=table: self._table_menu(t, menu, pos)
         tv.addWidget(summary)
         tv.addWidget(table, 1)
         split.addWidget(top)
@@ -182,8 +181,7 @@ class NavigationPage(Page):
     # --- tabs -----------------------------------------------------------------
     def _fleet_tab(self):
         self.fleet = make_table(["Character", "System", "Sec", "Docked at", "Online"], stretch=3, prefs_key="fleet")
-        self.fleet.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.fleet.customContextMenuRequested.connect(lambda pos: self._table_menu(self.fleet, pos, col=1))
+        self.fleet.menu_hook = lambda menu, pos: self._table_menu(self.fleet, menu, pos, col=1)
         return self.fleet
 
     def _route_tab(self):
@@ -312,6 +310,7 @@ class NavigationPage(Page):
         row.addWidget(avoid)
         v.addLayout(row)
         self.j_avoid = QListWidget()
+        install_selection_tools(self.j_avoid)
         self.j_avoid.setMaximumHeight(90)
         v.addWidget(self.j_avoid)
         rm = button("Remove selected", "fa5s.times")
@@ -576,20 +575,23 @@ class NavigationPage(Page):
                                     for s in structs])
 
     # --- context menus ----------------------------------------------------------
-    def _table_menu(self, table, pos, col=1):
+    def _table_menu(self, table, menu, pos, col=1):
+        """Adds the system actions for the row under the mouse to a table's right-click menu."""
         row = table.rowAt(pos.y())
-        if row < 0:
-            return
-        item = table.item(row, col)
+        item = table.item(row, col) if row >= 0 else None
         sid = item.data(USER_ROLE) if item else None
         if sid:
-            self._system_menu(int(sid), table.viewport().mapToGlobal(pos))
+            self._fill_system_menu(menu, int(sid))
 
     def _system_menu(self, sid, global_pos):
-        if not self._universe or sid not in self._universe.systems:
-            return
-        name = self._universe.name(sid)
         menu = QMenu(self)
+        if self._fill_system_menu(menu, sid):
+            menu.exec(global_pos)
+
+    def _fill_system_menu(self, menu, sid):
+        if not self._universe or sid not in self._universe.systems:
+            return False
+        name = self._universe.name(sid)
         menu.addSection(name)
         menu.addAction("Route from here", lambda: (self.r_from.setText(name), self.g_from.setText(name),
                                                    self._set_waypoint_end(name, first=True)))
@@ -606,7 +608,7 @@ class NavigationPage(Page):
         region = self._universe.region_name(sid)
         if region:
             menu.addAction(f"Open {region} on Dotlan", lambda: webbrowser.open(dotlan_url(region, "map")))
-        menu.exec(global_pos)
+        return True
 
     def _avoid(self, name):
         if self._last == "jump":
@@ -723,6 +725,7 @@ class NavigationPage(Page):
     @staticmethod
     def _drag_list():
         lst = QListWidget()
+        install_selection_tools(lst)
         lst.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         lst.setDefaultDropAction(Qt.DropAction.MoveAction)
         lst.setMaximumHeight(130)

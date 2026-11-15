@@ -6,8 +6,8 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBo
 
 from .. import contacts_sync
 from ..sync import S_CONTACTS, S_WRITE_CONTACTS
-from .widgets import (USER_ROLE, Card, Page, SortItem, button, fill_char_combo, fill_table, make_table, muted,
-                      standing_color, status_color)
+from .widgets import (USER_ROLE, Card, Page, SortItem, button, fill_char_combo, fill_table, install_selection_tools,
+                      make_table, muted, standing_color, status_color)
 
 
 def _standing(s):
@@ -39,6 +39,7 @@ class ContactsPage(Page):
         grid.addWidget(self.source, 1, 0)
         grid.addWidget(QLabel("<b>To these characters</b>"), 2, 0)
         self.targets = QListWidget()
+        install_selection_tools(self.targets)  # select several, then Space or right-click to tick them
         self.targets.setMaximumHeight(130)
         self.targets.setStyleSheet("border: 1px solid palette(mid); border-radius: 4px;")
         grid.addWidget(self.targets, 3, 0)

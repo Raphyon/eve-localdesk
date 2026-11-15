@@ -29,6 +29,11 @@ shows a banner with a download button when there is one. Turn it off in Setup.
 Tables fit the window: long text is shortened with "…" (hover for the full text) instead of scrolling sideways.
 **Right-click any table header to show or hide columns**; the choice is remembered per table.
 
+Tables and lists support multi-select: Ctrl+click, Shift+click and **Ctrl+A** to select all. **Ctrl+C** copies the
+selected rows as tab-separated text, with headers, ready to paste into a spreadsheet. Where rows have tick boxes
+(e.g. copy or sync targets), **Space** ticks or unticks all selected rows. Right-click a row for Copy, Select all and
+that table's own actions. Tables with ISK amounts, and Assets, show the total of the selected rows.
+
 ## Setup (once, about 5 minutes)
 
 ### 1. Register a free EVE application
